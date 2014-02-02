@@ -25,6 +25,6 @@ public class BubbleUpDisjointCommand extends Command {
 		Node creator = new StringNode("BubbleUpCommand");
 		DAGPortHandler dagHandler = (DAGPortHandler) handler;
 		CycDAG dag=(CycDAG) dagHandler.getDAG();
-		dag.bubbleUpDisjoints(creator);
+		//dag.bubbleUpDisjoints(creator);
 	}
 }
