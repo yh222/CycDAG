@@ -345,7 +345,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		int targetdepth = Integer.parseInt(((DAGNode) targetNode)
 				.getProperty("depth"));
 		if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2,
-				targetdepth * 0.2)) {
+				1)) {
 			return -1 * disjointcount;
 		}
 		return disjointcount;
@@ -402,7 +402,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 		int similaritycount = 0;
 		for (Node p : allparents) {
-			for (Map.Entry<Node, Integer> m : mostfrequentparents) {
+			for (int i=0;i<mostfrequentparents.size()-1;i++) {
+				Map.Entry<Node, Integer> m=mostfrequentparents.get(i);
 				if (m.getKey().equals(p) && m.getValue() >= percentagethreshold*allparents.size()) {
 					if (similaritycount++ > torlance)
 						return true;
