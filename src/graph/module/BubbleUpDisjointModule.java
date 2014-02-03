@@ -18,7 +18,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -44,12 +43,13 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	private HashSet<Pair<Node, Node>> exploredPairs_ = new HashSet<Pair<Node, Node>>();
 	private HashSet<Node> rejectedEvidences_ = new HashSet<Node>();
 
+	// TODO: magic number here, need to be reasoned
 	private static double THEP_ = 0.4;
 	// The limitation for exploring children of each parent
 	private static int MAXCHILDEXPLORATION_ = 500;
 	private static int MINCHILDEXPLORATION_ = 10;
-	
-	private int disjointCreated_=0;
+
+	private int disjointCreated_ = 0;
 
 	/*
 	 * Node: toExplore_ and exploredPairs_ represent different set of pairs,
@@ -101,7 +101,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// Retrieve and sort indexes of lists organized by depth
 		List<Integer> keyset = new ArrayList<Integer>(toExplore_.keySet());
 		Collections.sort(keyset);
-		
+
 		// Loop backwards, from the greatest index
 		int count = 0;
 		int tenPercent = (disjointEdges.size() * 2) / 10;
@@ -225,10 +225,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		double p = (double) countChildrenStatDisjointed(children, targetNode,
 				roundedchildrensize) / roundedchildrensize;
 
-		// TODO: magic number here, need to be reasoned
 		if (p > THEP_) {
-			//
-
 			isDisjointed = true;
 		}
 
@@ -259,8 +256,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					tempdisjointed = (queryModule_.prove(
 							CommonConcepts.DISJOINTWITH.getNode(dag_),
 							targetNode, c)) ? true : false;
-					out.println("--"+c.getName() + " is disjointed to: " +targetNode.getName()+": "
-							+ tempdisjointed);
+					out.println("--" + c.getName() + " is disjointed to: "
+							+ targetNode.getName() + ": " + tempdisjointed);
 				}
 
 			} catch (IOException e) {
@@ -273,7 +270,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					CommonConcepts.DISJOINTWITH.getNode(dag_),
 					collectionParent, targetNode }, false);
 			disjointCreated_++;
-			System.out.println(disjointCreated_+" disjoint edges created");
+			System.out.println(disjointCreated_ + " disjoint edges created");
 		}
 	}
 
@@ -282,30 +279,25 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			Node targetNode, int roundedchildrensize) {
 		int disjointcount = 0;
 		int undefinedcount = 0;
-		int randomsamplecountdown = MAXCHILDEXPLORATION_;
+
 		boolean isLargeCollection = children.size() > MAXCHILDEXPLORATION_;
 		Map<Node, Integer> similarityparent = new HashMap<Node, Integer>();
-		Map<Node, Integer> similaritytype = new HashMap<Node, Integer>();
 
 		Random random = new Random();
 		// random sampling for LIMITCHILDEXPLORATION times when children size is
 		// very large
-		for (int i = 0; i < roundedchildrensize; i++) {
+		for (int i = 0, randomsamplecountdown = MAXCHILDEXPLORATION_; i < roundedchildrensize
+				&& randomsamplecountdown > 0; i++, randomsamplecountdown--) {
 			Node child;
 			if (isLargeCollection) {
 				child = children.get(random.nextInt(roundedchildrensize));
-				randomsamplecountdown--;
-				if (randomsamplecountdown == 0) {
-					break;
-				}
 			} else {
 				child = children.get(i);
 			}
-			// get all parents for this child
+			// get all parents(genls/isa) for this child
 			Collection<Node> allparents = CommonQuery.MINGENLS.runQuery(dag_,
 					child);
-			Collection<Node> alltypes = CommonQuery.MINISA.runQuery(dag_,
-					targetNode);
+			allparents.addAll(CommonQuery.MINISA.runQuery(dag_, targetNode));
 
 			// Count number of appearance of each parent
 			int t = 0;
@@ -318,17 +310,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				}
 			}
 
-			// Count number of appearance of each type
-			t = 0;
-			for (Node type : alltypes) {
-				if (similaritytype.containsKey(type)) {
-					t = similaritytype.get(type);
-					similaritytype.put(type, t++);
-				} else {
-					similaritytype.put(type, 1);
-				}
-			}
-
 			// if child disjoint with targetNode, count++
 			if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
 					targetNode, child)) {
@@ -338,65 +319,43 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				// targetNode,skip
 				if (transitiveModule_.execute(true, targetNode, child) != null
 						|| transitiveModule_.execute(false, targetNode, child) != null)
-					return disjointcount * -1;
+					return -3;
 				else
 					undefinedcount++;
 			}
 			// The impossibility of disjoint can be explored before loop
 			// through all the child, since there is a statistic threshold
-			// TODO: magic number
 			if ((undefinedcount / roundedchildrensize) > 1 - THEP_) {
 				return -1;
 			}
 		}
 		// Get a list of frequency of parents' appearance, to determine the
 		// similarity of children
-		// TODO: magic number: 8
-		List<Map.Entry<Node, Integer>> mostfrequentparents = getMostFrequent(
-				similarityparent, 8);
+		List<Map.Entry<Node, Integer>> mostfrequentparents = sortParentsByFrequency(similarityparent);
 
-		List<Map.Entry<Node, Integer>> mostfrequenttypes = getMostFrequent(
-				similaritytype, 8);
-
-		// 2 comes from 3 used above
 		// If there were not enough parents or similarty is low, return
-		// nagative;
-		if (mostfrequentparents.size() < 3
-				|| mostfrequentparents.get(2).getValue() < roundedchildrensize * 0.2) {
-			// TODO: Magic number 0.7
-			if (mostfrequenttypes.size() < 3
-					|| mostfrequenttypes.get(2).getValue() < roundedchildrensize * 0.2)
+		// negative p;
+		if (mostfrequentparents.size() < 2
+				|| mostfrequentparents.get(1).getValue() < roundedchildrensize * 0.5) {
+			if (hasHighDiscretion(mostfrequentparents, roundedchildrensize,
+					0.4, 0.1)) {
 				return -2;
+			}
 		}
-
-		if (hasSimilarity(mostfrequentparents, mostfrequenttypes, targetNode,
-				0.2)) {
+		int targetdepth = Integer.parseInt(((DAGNode) targetNode)
+				.getProperty("depth"));
+		if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.1,
+				targetdepth * 0.3)) {
 			return -1 * disjointcount;
 		}
-
 		return disjointcount;
 	}
 
-	// Get a list(with "quantity" as list size) of parent nodes with most
-	// frequency
-	private List<Map.Entry<Node, Integer>> getMostFrequent(
-			Map<Node, Integer> similarity, int quantity) {
-		Iterator<Map.Entry<Node, Integer>> it = similarity.entrySet()
-				.iterator();
+	// Sort and return a list of parents by their frequency
+	private List<Map.Entry<Node, Integer>> sortParentsByFrequency(
+			Map<Node, Integer> similarity) {
 		List<Map.Entry<Node, Integer>> list = new ArrayList<Map.Entry<Node, Integer>>();
 		mapEntryComparator comaprator = new mapEntryComparator();
-
-		while (it.hasNext()) {
-			Map.Entry<Node, Integer> pair = it.next();
-			if (list.size() < quantity) {
-				list.add(pair);
-			} else if (list.get(quantity - 1).getValue() < pair.getValue()) {
-				list.set(quantity - 1, pair);
-				// Sort the list from large to small
-				Collections.sort(list, comaprator);
-			}
-			it.remove(); // avoids a ConcurrentModificationException
-		}
 		Collections.sort(list, comaprator);
 		return list;
 	}
@@ -411,36 +370,43 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		}
 	}
 
-	/*
-	 * 
-	 * */
-	private boolean hasSimilarity(
+	// Test the discretion of the parents of the collection,return true if
+	// discretion is high
+	private boolean hasHighDiscretion(
 			List<Map.Entry<Node, Integer>> mostfrequentparents,
-			List<Map.Entry<Node, Integer>> mostfrequenttypes, Node targetNode,
-			double threshold) {
-		// get all parents for targetNode
-		Collection<Node> allparents = CommonQuery.MINGENLS.runQuery(dag_,
-				targetNode);
-		Collection<Node> alltypes = CommonQuery.MINISA.runQuery(dag_,
-				targetNode);
-		int similaritycount = 0;
-		int magicnumber = 2;
-
-		for (Node p : allparents) {
-			for (Map.Entry<Node, Integer> m : mostfrequentparents) {
-				if (m.getKey().equals(p) && m.getValue() >= threshold
-						&& similaritycount++ == magicnumber) {
+			int roundedchildrensize, double torlancemodifier, double coveragethreshold) {
+		int torlance = (int) (roundedchildrensize * torlancemodifier);
+		// 2<=(roundedchildrensize * torlancemodifier)<=50
+		for (int i = mostfrequentparents.size() - 1; i > 0; i--) {
+			if (mostfrequentparents.get(i).getValue() < roundedchildrensize
+					* coveragethreshold) {
+				if (torlance-- < 0)
 					return true;
-				}
 			}
 		}
+		return false;
+	}
 
-		for (Node p : alltypes) {
-			for (Map.Entry<Node, Integer> m : mostfrequenttypes) {
-				if (m.getKey().equals(p) && m.getValue() >= threshold
-						&& similaritycount++ == magicnumber) {
-					return true;
-				}
+	/*
+	 * Check if the collection has some degree of similarity with the target
+	 * node
+	 */
+	private boolean hasSimilarityWithTarget(
+			List<Map.Entry<Node, Integer>> mostfrequentparents,
+			Node targetNode, double percentagethreshold, double torlance) {
+		// get all parents for targetNode
+		Collection<Node> allparents = CommonQuery.ALLGENLS.runQuery(dag_,
+				targetNode);
+		allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, targetNode));
+
+		int similaritycount = 0;
+		for (Node p : allparents) {
+			for (Map.Entry<Node, Integer> m : mostfrequentparents) {
+				if (m.getKey().equals(p) && m.getValue() >= percentagethreshold) {
+					if (similaritycount++ == torlance)
+						return true;
+				} else if (m.getValue() < percentagethreshold)
+					break;
 			}
 		}
 		return false;
