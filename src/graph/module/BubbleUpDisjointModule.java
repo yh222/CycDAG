@@ -39,24 +39,17 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	private transient RelatedEdgeModule relEdgeModule_;
 	private transient TransitiveIntervalSchemaModule transitiveModule_;
 	private transient QueryModule queryModule_;
-	/*
-	 * Assuming the maximum distance from "Thing"(depth) for every disjoint edge
-	 * is less than 100
-	 */
-	// private static int ARRAYSIZE = 100;
-	// ArrayList of ArrayLists, with fixed size 100(depth<=100)
-	// private List<List<Pair<Node, Node>>> toExplore_ = new
-	// ArrayList<List<Pair<Node, Node>>>(
-	// Collections.nCopies(ARRAYSIZE, new ArrayList<Pair<Node, Node>>()));
-	// private List<List<Pair<Node, Node>>> toExplore_ = new
-	// ArrayList<List<Pair<Node, Node>>>();
+
 	private Map<Integer, List<Pair<Node, Node>>> toExplore_ = new HashMap<Integer, List<Pair<Node, Node>>>();
 	private HashSet<Pair<Node, Node>> exploredPairs_ = new HashSet<Pair<Node, Node>>();
 	private HashSet<Node> rejectedEvidences_ = new HashSet<Node>();
 
-	private static int LIMITCHILDEXPLORATION = 500;
-
+	private static double THEP_ = 0.4;
 	// The limitation for exploring children of each parent
+	private static int MAXCHILDEXPLORATION_ = 500;
+	private static int MINCHILDEXPLORATION_ = 10;
+	
+	private int disjointCreated_=0;
 
 	/*
 	 * Node: toExplore_ and exploredPairs_ represent different set of pairs,
@@ -104,21 +97,21 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// Result of sorting will stored at toExplore_
 		sortToExplore(disjointEdges);
 		System.out.println("Pairs sorted");
-		// Loop backwards
-		int count = 0;
-		int tenPercent = (disjointEdges.size() * 2) / 10;
-		//Retrieve and sort indexes of lists organized by depth
+
+		// Retrieve and sort indexes of lists organized by depth
 		List<Integer> keyset = new ArrayList<Integer>(toExplore_.keySet());
 		Collections.sort(keyset);
-		//Looping from the greatest index
+		
+		// Loop backwards, from the greatest index
+		int count = 0;
+		int tenPercent = (disjointEdges.size() * 2) / 10;
 		for (int i = keyset.size() - 1; i > 0; i--) {
-			int index = keyset.get(i);
-			//null proof
-			if( toExplore_.get(index)==null){
+			// null proof
+			if (toExplore_.get(keyset.get(i)) == null) {
 				continue;
 			}
-			for (int j = 0; j < toExplore_.get(index).size(); j++) {
-				Pair<Node, Node> pair = toExplore_.get(index).get(j);
+			for (int j = 0; j < toExplore_.get(keyset.get(i)).size(); j++) {
+				Pair<Node, Node> pair = toExplore_.get(keyset.get(i)).get(j);
 				// Find all Min parent nodes for source node
 				Collection<Node> minGenls = CommonQuery.MINGENLS.runQuery(dag_,
 						pair.objA_);
@@ -130,7 +123,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				if (count % tenPercent == 0) {
 					System.out.println((count / tenPercent * 10) + "% done");
 					System.out.println(toExplore_.get(i).size() - j
-							+ " pairs left, index= " + index);
+							+ " pairs left, index= " + keyset.get(i));
 				}
 			}
 		}
@@ -216,11 +209,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		List<Node> children = new ArrayList<Node>(
 				CommonQuery.MAXSPECS.runQuery(dag_, collectionParent));
 		// Set upper bound of children size that to be explored
-		int roundedchildrensize = children.size() > LIMITCHILDEXPLORATION ? LIMITCHILDEXPLORATION
+		int roundedchildrensize = children.size() > MAXCHILDEXPLORATION_ ? MAXCHILDEXPLORATION_
 				: children.size();
 		if (roundedchildrensize == 0) {
 			return;
-		} else if (roundedchildrensize <= 10) {
+		} else if (roundedchildrensize <= MINCHILDEXPLORATION_) {
 			// Don't decide if children size is too small
 			return;
 		}
@@ -233,7 +226,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				roundedchildrensize) / roundedchildrensize;
 
 		// TODO: magic number here, need to be reasoned
-		if (p > 0.4) {
+		if (p > THEP_) {
 			//
 
 			isDisjointed = true;
@@ -245,7 +238,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					+ collectionParent.getName());
 			rejectedEvidences_.add(collectionParent);
 		} else if (p * roundedchildrensize > -1
-				&& p * roundedchildrensize < -0.4) {
+				&& p * roundedchildrensize < THEP_ * -1) {
 			System.out.println("Possible child:" + targetNode.getName()
 					+ " is child of " + collectionParent.getName());
 		}
@@ -266,7 +259,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					tempdisjointed = (queryModule_.prove(
 							CommonConcepts.DISJOINTWITH.getNode(dag_),
 							targetNode, c)) ? true : false;
-					out.println(c.getName() + " is disjointed:"
+					out.println("--"+c.getName() + " is disjointed to: " +targetNode.getName()+": "
 							+ tempdisjointed);
 				}
 
@@ -279,6 +272,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			dag_.findOrCreateEdge(creator, new Node[] {
 					CommonConcepts.DISJOINTWITH.getNode(dag_),
 					collectionParent, targetNode }, false);
+			disjointCreated_++;
+			System.out.println(disjointCreated_+" disjoint edges created");
 		}
 	}
 
@@ -287,8 +282,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			Node targetNode, int roundedchildrensize) {
 		int disjointcount = 0;
 		int undefinedcount = 0;
-		int randomsamplecountdown = LIMITCHILDEXPLORATION;
-		boolean isLargeCollection = children.size() > LIMITCHILDEXPLORATION;
+		int randomsamplecountdown = MAXCHILDEXPLORATION_;
+		boolean isLargeCollection = children.size() > MAXCHILDEXPLORATION_;
 		Map<Node, Integer> similarityparent = new HashMap<Node, Integer>();
 		Map<Node, Integer> similaritytype = new HashMap<Node, Integer>();
 
@@ -350,7 +345,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			// The impossibility of disjoint can be explored before loop
 			// through all the child, since there is a statistic threshold
 			// TODO: magic number
-			if ((undefinedcount / roundedchildrensize) > 0.7) {
+			if ((undefinedcount / roundedchildrensize) > 1 - THEP_) {
 				return -1;
 			}
 		}
@@ -366,11 +361,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// 2 comes from 3 used above
 		// If there were not enough parents or similarty is low, return
 		// nagative;
-		if (mostfrequentparents.size() < 4
-				|| mostfrequentparents.get(2).getValue() < roundedchildrensize * 0.3) {
+		if (mostfrequentparents.size() < 3
+				|| mostfrequentparents.get(2).getValue() < roundedchildrensize * 0.2) {
 			// TODO: Magic number 0.7
-			if (mostfrequenttypes.size() < 4
-					|| mostfrequenttypes.get(2).getValue() < roundedchildrensize * 0.3)
+			if (mostfrequenttypes.size() < 3
+					|| mostfrequenttypes.get(2).getValue() < roundedchildrensize * 0.2)
 				return -2;
 		}
 
