@@ -44,7 +44,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	private HashSet<Node> rejectedEvidences_ = new HashSet<Node>();
 
 	// TODO: magic number here, need to be reasoned
-	private static double THEP_ = 0.4;
+	private static double THEP_ = 0.3;
 	// The limitation for exploring children of each parent
 	private static int MAXCHILDEXPLORATION_ = 500;
 	private static int MINCHILDEXPLORATION_ = 10;
@@ -336,16 +336,16 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// If there were not enough parents or similarty is low, return
 		// negative p;
 		if (mostfrequentparents.size() < 2
-				|| mostfrequentparents.get(1).getValue() < roundedchildrensize * 0.5) {
+				|| mostfrequentparents.get(1).getValue() < roundedchildrensize * 0.4) {
 			if (hasHighDiscretion(mostfrequentparents, roundedchildrensize,
-					0.4, 0.1)) {
+					0.2, 0.3)) {
 				return -2;
 			}
 		}
 		int targetdepth = Integer.parseInt(((DAGNode) targetNode)
 				.getProperty("depth"));
-		if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.1,
-				targetdepth * 0.3)) {
+		if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2,
+				targetdepth * 0.2)) {
 			return -1 * disjointcount;
 		}
 		return disjointcount;
@@ -374,7 +374,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// discretion is high
 	private boolean hasHighDiscretion(
 			List<Map.Entry<Node, Integer>> mostfrequentparents,
-			int roundedchildrensize, double torlancemodifier, double coveragethreshold) {
+			int roundedchildrensize, double torlancemodifier,
+			double coveragethreshold) {
 		int torlance = (int) (roundedchildrensize * torlancemodifier);
 		// 2<=(roundedchildrensize * torlancemodifier)<=50
 		for (int i = mostfrequentparents.size() - 1; i > 0; i--) {
@@ -402,10 +403,10 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		int similaritycount = 0;
 		for (Node p : allparents) {
 			for (Map.Entry<Node, Integer> m : mostfrequentparents) {
-				if (m.getKey().equals(p) && m.getValue() >= percentagethreshold) {
-					if (similaritycount++ == torlance)
+				if (m.getKey().equals(p) && m.getValue() >= percentagethreshold*allparents.size()) {
+					if (similaritycount++ > torlance)
 						return true;
-				} else if (m.getValue() < percentagethreshold)
+				} else if (m.getValue() < percentagethreshold*allparents.size())
 					break;
 			}
 		}
