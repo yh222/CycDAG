@@ -299,7 +299,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			// get all parents(genls/isa) for this child
 			Collection<Node> allparents = CommonQuery.MINGENLS.runQuery(dag_,
 					child);
-			allparents.addAll(CommonQuery.MINISA.runQuery(dag_, targetNode));
+			// allparents.addAll(CommonQuery.MINISA.runQuery(dag_, targetNode));
 
 			// Count number of appearance of each parent
 			int t = 0;
@@ -337,17 +337,16 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 		// If there were not enough parents or similarty is low, return
 		// negative p;
-		if (mostfrequentparents.size() < 2
-				|| mostfrequentparents.get(1).getValue() < roundedchildrensize * 0.4) {
-			if (hasHighDiscretion(mostfrequentparents, roundedchildrensize,
-					0.2, 0.3)) {
-				return -2;
-			}
+		if (hasHighDiscretion(mostfrequentparents, roundedchildrensize, 0.8,
+				0.1)) {
+			return -2;
 		}
 
 		// if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2, 1))
 		// {
-		if (hasSimilarityBetween(collectionParent, targetNode, 0.5)) {
+		if (hasSimilarityBetween(collectionParent, targetNode, 0.1)) {
+			System.out.println("rejected due to high similarity between:"
+					+ targetNode.getName() + " " + collectionParent.getName());
 			return -1 * disjointcount;
 		}
 		return disjointcount;
@@ -356,7 +355,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// Sort and return a list of parents by their frequency
 	private List<Map.Entry<Node, Integer>> sortParentsByFrequency(
 			Map<Node, Integer> similarity) {
-		List<Map.Entry<Node, Integer>> list = new ArrayList<Map.Entry<Node, Integer>>();
+		List<Map.Entry<Node, Integer>> list = new ArrayList<Map.Entry<Node, Integer>>(
+				similarity.entrySet());
 		mapEntryComparator comaprator = new mapEntryComparator();
 		Collections.sort(list, comaprator);
 		return list;
@@ -378,21 +378,28 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			List<Map.Entry<Node, Integer>> mostfrequentparents,
 			int roundedchildrensize, double torlancemodifier,
 			double coveragethreshold) {
+		// 2<=torlance<=50
 		int torlance = (int) (roundedchildrensize * torlancemodifier);
-		// 2<=(roundedchildrensize * torlancemodifier)<=50
+		System.out.println("torlance:" + torlance);
+		System.out.println("roundedchildrensize * coveragethreshold:"
+				+ roundedchildrensize * coveragethreshold);
+		if (mostfrequentparents.size() < 3) {
+			return true;
+		}
 		for (int i = mostfrequentparents.size() - 1; i > 0; i--) {
 			if (mostfrequentparents.get(i).getValue() < roundedchildrensize
-					* coveragethreshold) {
-				if (torlance-- < 0)
-					return true;
+					* coveragethreshold
+					&& torlance-- < 0) {
+				return true;
 			}
 		}
+		System.out.println("torlance left:" + torlance);
 		return false;
 	}
 
 	/*
-	 * Check if the collection head has some degree of similarity with the target
-	 * node
+	 * Check if the collection head has some degree of similarity with the
+	 * target node
 	 */
 	private boolean hasSimilarityBetween(Node collectionHead, Node targetNode,
 			double exploreTillPercentage) {
@@ -410,13 +417,19 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// (similaritycount++ > torlance) return true; } else if (m.getValue() <
 		// percentagethreshold*allparents.size()) break; } } return false;
 
-		double targetdepth = Integer.parseInt(((DAGNode) targetNode)
-				.getProperty("depth")) * exploreTillPercentage + 1;
-		double headdepth = Integer.parseInt(((DAGNode) collectionHead)
-				.getProperty("depth")) * exploreTillPercentage + 1;
+		int targetdepth = (int) (Integer.parseInt(((DAGNode) targetNode)
+				.getProperty("depth")) * exploreTillPercentage);
+		int headdepth = (int) (Integer.parseInt(((DAGNode) collectionHead)
+				.getProperty("depth")) * exploreTillPercentage);
 		Set<Node> explorednet = new HashSet<Node>();
-		List<Node> frontiertargetnode = new ArrayList<Node>();
-		List<Node> frontiercollectionhead = new ArrayList<Node>();
+		explorednet.add(targetNode);
+		explorednet.add(collectionHead);
+		List<Node> frontiertargetnode = new ArrayList<Node>(
+				CommonQuery.MINGENLS.runQuery(dag_, targetNode));
+		List<Node> frontiercollectionhead = new ArrayList<Node>(
+				CommonQuery.MINGENLS.runQuery(dag_, collectionHead));
+		System.out.println("targetdepth:" + targetdepth);
+		System.out.println("headdepth:" + headdepth);
 
 		while (targetdepth >= 0 || headdepth >= 0) {
 			if (targetdepth-- >= 0) {
@@ -427,6 +440,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					return true;
 				}
 			}
+
 			if (headdepth-- >= 0) {
 				if (!hasConjoint(explorednet, frontiercollectionhead)) {
 					explorednet.addAll(frontiercollectionhead);
@@ -436,15 +450,16 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				}
 			}
 		}
-
 		return false;
 	}
 
 	// Check if any element of the list exist in the set
 	private boolean hasConjoint(Set<Node> explorednet, List<Node> frontier) {
 		for (Node n : frontier) {
-			if (explorednet.contains(n))
-				return true;
+			if (explorednet.contains(n)){
+				System.out.println("conjoint found at:" + n.getName());
+				System.out.println("explorednet:" + explorednet);
+				return true;}
 		}
 		return false;
 	}
