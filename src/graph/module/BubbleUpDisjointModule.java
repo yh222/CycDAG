@@ -21,6 +21,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import util.Pair;
 
@@ -222,8 +223,9 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// children and targetNode, and the amount of child to decide if
 		// collectionParent disjoint with targetNode
 		boolean isDisjointed = false;
-		double p = (double) countChildrenStatDisjointed(children, targetNode,
-				roundedchildrensize) / roundedchildrensize;
+		double p = (double) countChildrenStatDisjointed(collectionParent,
+				children, targetNode, roundedchildrensize)
+				/ roundedchildrensize;
 
 		if (p > THEP_) {
 			isDisjointed = true;
@@ -275,8 +277,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	// Return count of disjoint children
-	private int countChildrenStatDisjointed(List<Node> children,
-			Node targetNode, int roundedchildrensize) {
+	private int countChildrenStatDisjointed(Node collectionParent,
+			List<Node> children, Node targetNode, int roundedchildrensize) {
 		int disjointcount = 0;
 		int undefinedcount = 0;
 
@@ -342,10 +344,10 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				return -2;
 			}
 		}
-		int targetdepth = Integer.parseInt(((DAGNode) targetNode)
-				.getProperty("depth"));
-		if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2,
-				1)) {
+
+		// if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2, 1))
+		// {
+		if (hasSimilarityBetween(collectionParent, targetNode, 0.5)) {
 			return -1 * disjointcount;
 		}
 		return disjointcount;
@@ -389,28 +391,71 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	/*
-	 * Check if the collection has some degree of similarity with the target
+	 * Check if the collection head has some degree of similarity with the target
 	 * node
 	 */
-	private boolean hasSimilarityWithTarget(
-			List<Map.Entry<Node, Integer>> mostfrequentparents,
-			Node targetNode, double percentagethreshold, double torlance) {
-		// get all parents for targetNode
-		Collection<Node> allparents = CommonQuery.ALLGENLS.runQuery(dag_,
-				targetNode);
-		allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, targetNode));
+	private boolean hasSimilarityBetween(Node collectionHead, Node targetNode,
+			double exploreTillPercentage) {
 
-		int similaritycount = 0;
-		for (Node p : allparents) {
-			for (int i=0;i<mostfrequentparents.size()-1;i++) {
-				Map.Entry<Node, Integer> m=mostfrequentparents.get(i);
-				if (m.getKey().equals(p) && m.getValue() >= percentagethreshold*allparents.size()) {
-					if (similaritycount++ > torlance)
-						return true;
-				} else if (m.getValue() < percentagethreshold*allparents.size())
-					break;
+		// List<Map.Entry<Node, Integer>> mostfrequentparents, Node targetNode,
+		// double percentagethreshold, double torlance) { // get all parents for
+		// targetNode Collection<Node> allparents =
+		// CommonQuery.ALLGENLS.runQuery(dag_, targetNode);
+		// allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, targetNode));
+		//
+		// int similaritycount = 0; for (Node p : allparents) { for (int
+		// i=0;i<mostfrequentparents.size()-1;i++) { Map.Entry<Node, Integer>
+		// m=mostfrequentparents.get(i); if (m.getKey().equals(p) &&
+		// m.getValue() >= percentagethreshold*allparents.size()) { if
+		// (similaritycount++ > torlance) return true; } else if (m.getValue() <
+		// percentagethreshold*allparents.size()) break; } } return false;
+
+		double targetdepth = Integer.parseInt(((DAGNode) targetNode)
+				.getProperty("depth")) * exploreTillPercentage + 1;
+		double headdepth = Integer.parseInt(((DAGNode) collectionHead)
+				.getProperty("depth")) * exploreTillPercentage + 1;
+		Set<Node> explorednet = new HashSet<Node>();
+		List<Node> frontiertargetnode = new ArrayList<Node>();
+		List<Node> frontiercollectionhead = new ArrayList<Node>();
+
+		while (targetdepth >= 0 || headdepth >= 0) {
+			if (targetdepth-- >= 0) {
+				if (!hasConjoint(explorednet, frontiertargetnode)) {
+					explorednet.addAll(frontiertargetnode);
+					frontiertargetnode = exploreNextFrontier(frontiertargetnode);
+				} else {
+					return true;
+				}
 			}
+			if (headdepth-- >= 0) {
+				if (!hasConjoint(explorednet, frontiercollectionhead)) {
+					explorednet.addAll(frontiercollectionhead);
+					frontiercollectionhead = exploreNextFrontier(frontiercollectionhead);
+				} else {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	// Check if any element of the list exist in the set
+	private boolean hasConjoint(Set<Node> explorednet, List<Node> frontier) {
+		for (Node n : frontier) {
+			if (explorednet.contains(n))
+				return true;
 		}
 		return false;
 	}
+
+	// Loop through a list of nodes and return all mingenl parents of them
+	private List<Node> exploreNextFrontier(List<Node> frontier) {
+		List<Node> list = new ArrayList<Node>();
+		for (Node n : frontier) {
+			list.addAll(CommonQuery.MINGENLS.runQuery(dag_, n));
+		}
+		return list;
+	}
+
 }
