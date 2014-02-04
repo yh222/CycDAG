@@ -299,7 +299,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			// get all parents(genls/isa) for this child
 			Collection<Node> allparents = CommonQuery.MINGENLS.runQuery(dag_,
 					child);
-			// allparents.addAll(CommonQuery.MINISA.runQuery(dag_, targetNode));
+			allparents.addAll(CommonQuery.MINISA.runQuery(dag_, child));
 
 			// Count number of appearance of each parent
 			int t = 0;
@@ -337,9 +337,12 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 		// If there were not enough parents or similarty is low, return
 		// negative p;
-		if (hasHighDiscretion(mostfrequentparents, roundedchildrensize, 0.8,
-				0.1)) {
-			return -2;
+		if (mostfrequentparents.size() < 5
+				|| mostfrequentparents.get(4).getValue() < roundedchildrensize * 0.5) {
+			if (hasHighDiscretion(mostfrequentparents, roundedchildrensize,
+					0.8, 0.1)) {
+				return -2;
+			}
 		}
 
 		// if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2, 1))
@@ -456,10 +459,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// Check if any element of the list exist in the set
 	private boolean hasConjoint(Set<Node> explorednet, List<Node> frontier) {
 		for (Node n : frontier) {
-			if (explorednet.contains(n)){
+			if (explorednet.contains(n)) {
 				System.out.println("conjoint found at:" + n.getName());
 				System.out.println("explorednet:" + explorednet);
-				return true;}
+				return true;
+			}
 		}
 		return false;
 	}
