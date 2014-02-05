@@ -333,20 +333,14 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		}
 		// Get a list of frequency of parents' appearance, to determine the
 		// similarity of children
-		List<Map.Entry<Node, Integer>> mostfrequentparents = sortParentsByFrequency(similarityparent);
+		List<Map.Entry<Node, Integer>> sortedfrequentparents = sortParentsByFrequency(similarityparent);
 
-		// If there were not enough parents or similarty is low, return
+		// If similarity is low, return
 		// negative p;
-		if (mostfrequentparents.size() < 5
-				|| mostfrequentparents.get(4).getValue() < roundedchildrensize * 0.5) {
-			if (hasHighDiscretion(mostfrequentparents, roundedchildrensize,
-					0.8, 0.1)) {
-				return -2;
-			}
+		if (hasHighDiscretion(sortedfrequentparents, 0.1)) {
+			return -2;
 		}
 
-		// if (hasSimilarityWithTarget(mostfrequentparents, targetNode, 0.2, 1))
-		// {
 		if (hasSimilarityBetween(collectionParent, targetNode, 0.1)) {
 			System.out.println("rejected due to high similarity between:"
 					+ targetNode.getName() + " " + collectionParent.getName());
@@ -378,26 +372,24 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// Test the discretion of the parents of the collection,return true if
 	// discretion is high
 	private boolean hasHighDiscretion(
-			List<Map.Entry<Node, Integer>> mostfrequentparents,
-			int roundedchildrensize, double torlancemodifier,
-			double coveragethreshold) {
-		// 2<=torlance<=50
-		int torlance = (int) (roundedchildrensize * torlancemodifier);
-		System.out.println("torlance:" + torlance);
-		System.out.println("roundedchildrensize * coveragethreshold:"
-				+ roundedchildrensize * coveragethreshold);
-		if (mostfrequentparents.size() < 3) {
+			List<Map.Entry<Node, Integer>> sortedfrequentparents,
+			double deviationthreshold) {
+		// Calculate mean
+		double mean = 0;
+		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
+			mean += sortedfrequentparents.get(i).getValue();
+		}
+		mean /= sortedfrequentparents.size();
+		// Calculate variance
+		double variance = 0;
+		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
+			variance += Math.pow(
+					sortedfrequentparents.get(i).getValue() - mean, 2);
+		}
+		System.out.println("stdDev:" + Math.sqrt(variance));
+		if (Math.sqrt(variance) > deviationthreshold) {
 			return true;
-		}
-		for (int i = mostfrequentparents.size() - 1; i > 0; i--) {
-			if (mostfrequentparents.get(i).getValue() < roundedchildrensize
-					* coveragethreshold
-					&& torlance-- < 0) {
-				return true;
-			}
-		}
-		System.out.println("torlance left:" + torlance);
-		return false;
+		}		return false;
 	}
 
 	/*
@@ -406,19 +398,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	 */
 	private boolean hasSimilarityBetween(Node collectionHead, Node targetNode,
 			double exploreTillPercentage) {
-
-		// List<Map.Entry<Node, Integer>> mostfrequentparents, Node targetNode,
-		// double percentagethreshold, double torlance) { // get all parents for
-		// targetNode Collection<Node> allparents =
-		// CommonQuery.ALLGENLS.runQuery(dag_, targetNode);
-		// allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, targetNode));
-		//
-		// int similaritycount = 0; for (Node p : allparents) { for (int
-		// i=0;i<mostfrequentparents.size()-1;i++) { Map.Entry<Node, Integer>
-		// m=mostfrequentparents.get(i); if (m.getKey().equals(p) &&
-		// m.getValue() >= percentagethreshold*allparents.size()) { if
-		// (similaritycount++ > torlance) return true; } else if (m.getValue() <
-		// percentagethreshold*allparents.size()) break; } } return false;
 
 		int targetdepth = (int) (Integer.parseInt(((DAGNode) targetNode)
 				.getProperty("depth")) * exploreTillPercentage);
