@@ -337,7 +337,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 		// If similarity is low, return
 		// negative p;
-		if (hasHighDiscretion(sortedfrequentparents, 0.1)) {
+		if (hasHighDiscretion(sortedfrequentparents, 0.1, isLargeCollection)) {
 			return -2;
 		}
 
@@ -373,23 +373,26 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// discretion is high
 	private boolean hasHighDiscretion(
 			List<Map.Entry<Node, Integer>> sortedfrequentparents,
-			double deviationthreshold) {
+			double deviationthreshold, boolean islargecollection) {
 		// Calculate mean
 		double mean = 0;
+		int colsize = islargecollection ? sortedfrequentparents.size() - 1
+				: sortedfrequentparents.size();
 		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
 			mean += sortedfrequentparents.get(i).getValue();
 		}
-		mean /= sortedfrequentparents.size();
+		mean /= colsize;
 		// Calculate variance
 		double variance = 0;
 		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
 			variance += Math.pow(
 					sortedfrequentparents.get(i).getValue() - mean, 2);
 		}
-		System.out.println("stdDev:" + Math.sqrt(variance));
-		if (Math.sqrt(variance) > deviationthreshold) {
+		System.out.println("stdDev:" + Math.sqrt(variance / colsize));
+		if (Math.sqrt(variance / colsize) > deviationthreshold) {
 			return true;
-		}		return false;
+		}
+		return false;
 	}
 
 	/*
