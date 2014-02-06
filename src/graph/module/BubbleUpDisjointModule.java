@@ -7,6 +7,9 @@ import graph.core.Edge;
 import graph.core.Node;
 import graph.core.StringNode;
 import graph.inference.CommonQuery;
+import graph.inference.QueryObject;
+import graph.inference.Substitution;
+import graph.inference.VariableNode;
 
 import java.io.BufferedWriter;
 import java.io.FileWriter;
@@ -49,7 +52,9 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	// The limitation for exploring children of each parent
 	private static int MAXCHILDEXPLORATION_ = 500;
 	private static int MINCHILDEXPLORATION_ = 10;
-
+	// Threshold for Standard Deviation
+	private static int STDDEVTHRESHOLD_ = 10;
+	// count of disjoint edges created
 	private int disjointCreated_ = 0;
 
 	/*
@@ -118,7 +123,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 						pair.objA_);
 				// Try to establish disjoint edge from (each parent of A) to (B)
 				for (Node n : minGenls) {
-					bubbleParentToTarget(creator, n, pair.objB_);
+					List<Node> children = checkConstraintAndGetChildren(n,
+							pair.objB_);
+					if (children != null)
+						bubbleCollectionToTarget(creator, n, pair.objB_,
+								children);
 				}
 				count++;
 				if (count % tenPercent == 0) {
@@ -132,6 +141,39 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 		return false;
 
+	}
+
+	/*
+	 * Check constraints, avoid duplicated operations and return a list of child
+	 * nodes, of collectionParent.
+	 */
+	private List<Node> checkConstraintAndGetChildren(Node collectionParent,
+			Node targetNode) {
+		// If this is a sibling disjoint edge(parent of A genls B), ignore it.
+		if (collectionParent.equals(targetNode))
+			return null;
+
+		// If the pair of nodes has been explored before, skip
+		if (exploredPairs_.contains(new Pair<Node, Node>(targetNode,
+				collectionParent)))
+			return null;
+		exploredPairs_.add(new Pair<Node, Node>(targetNode, collectionParent));
+		if (rejectedEvidences_.contains(collectionParent))
+			return null;
+		// If the collectionParent is already disjoint with targetNode, skip it.
+		if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
+				collectionParent, targetNode))
+			return null;
+		// Get all highest child nodes of collectionParent
+		List<Node> children = new ArrayList<Node>(
+				CommonQuery.MAXSPECS.runQuery(dag_, collectionParent));
+		// Set upper bound of children size that to be explored
+
+		if (children.size() <= MINCHILDEXPLORATION_) {
+			// Don't decide if children size is too small
+			return null;
+		}
+		return children;
 	}
 
 	/**
@@ -189,35 +231,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	 * collectionParent: The parent node exploredEdges: The hash set contains
 	 * pairs of nodes that have been explored
 	 */
-	private void bubbleParentToTarget(Node creator, Node collectionParent,
-			Node targetNode) {
-		// If this is a sibling disjoint edge(parent of A genls B), ignore it.
-		if (collectionParent.equals(targetNode))
-			return;
+	private void bubbleCollectionToTarget(Node creator, Node collectionParent,
+			Node targetNode, List<Node> children) {
 
-		// If the pair of nodes has been explored before, skip
-		if (exploredPairs_.contains(new Pair<Node, Node>(targetNode,
-				collectionParent)))
-			return;
-		exploredPairs_.add(new Pair<Node, Node>(targetNode, collectionParent));
-		if (rejectedEvidences_.contains(collectionParent))
-			return;
-		// If the collectionParent is already disjoint with targetNode, skip it.
-		if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
-				collectionParent, targetNode))
-			return;
-		// Get all highest child nodes of collectionParent
-		List<Node> children = new ArrayList<Node>(
-				CommonQuery.MAXSPECS.runQuery(dag_, collectionParent));
-		// Set upper bound of children size that to be explored
 		int roundedchildrensize = children.size() > MAXCHILDEXPLORATION_ ? MAXCHILDEXPLORATION_
 				: children.size();
-		if (roundedchildrensize == 0) {
-			return;
-		} else if (roundedchildrensize <= MINCHILDEXPLORATION_) {
-			// Don't decide if children size is too small
-			return;
-		}
 
 		// Use the count of disjoint found between collectionParent's
 		// children and targetNode, and the amount of child to decide if
@@ -231,6 +249,14 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			isDisjointed = true;
 		}
 
+		saveAndPrintOutput(creator, collectionParent, targetNode, children,
+				roundedchildrensize, isDisjointed, p);
+	}
+
+	// Save the disjoint(if found one) and print other stats
+	private void saveAndPrintOutput(Node creator, Node collectionParent,
+			Node targetNode, List<Node> children, int roundedchildrensize,
+			boolean isDisjointed, double p) {
 		// TODO: for debug
 		if (p * roundedchildrensize == -2) {
 			System.out.println("Evidence rejected due to lack of similarity:"
@@ -242,7 +268,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					+ " is child of " + collectionParent.getName());
 		}
 		if (isDisjointed) {
-
 			System.out.println("Disjoint added btween:"
 					+ collectionParent.getName() + " " + targetNode.getName()
 					+ ", with p=" + p + ", Sample size=" + children.size());
@@ -276,7 +301,10 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		}
 	}
 
-	// Return count of disjoint children
+	/*
+	 * Return count of disjointed child. Return -3 if conjoint found. Return -2
+	 * if the collection has high discretion. Return -1 if p's too low
+	 */
 	private int countChildrenStatDisjointed(Node collectionParent,
 			List<Node> children, Node targetNode, int roundedchildrensize) {
 		int disjointcount = 0;
@@ -291,30 +319,18 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		for (int i = 0, randomsamplecountdown = MAXCHILDEXPLORATION_; i < roundedchildrensize
 				&& randomsamplecountdown > 0; i++, randomsamplecountdown--) {
 			Node child;
+			// Random sampling or iterate through the whole
 			if (isLargeCollection) {
 				child = children.get(random.nextInt(roundedchildrensize));
 			} else {
 				child = children.get(i);
 			}
-			// get all parents(genls/isa) for this child
-			Collection<Node> allparents = CommonQuery.MINGENLS.runQuery(dag_,
-					child);
-			allparents.addAll(CommonQuery.MINISA.runQuery(dag_, child));
 
-			// Count number of appearance of each parent
-			int t = 0;
-			for (Node parent : allparents) {
-				if (similarityparent.containsKey(parent)) {
-					t = similarityparent.get(parent) + 1;
-					similarityparent.put(parent, t);
-				} else {
-					similarityparent.put(parent, 1);
-				}
-			}
-
+			updateSimilarityParentData(similarityparent, child);
 			// if child disjoint with targetNode, count++
 			if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
-					targetNode, child)) {
+					targetNode, child)
+					&& isNotDirectlyDisjointed(targetNode, child)) {
 				disjointcount++;
 			} else {
 				// else if any conjoint found between the child and
@@ -333,20 +349,52 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		}
 		// Get a list of frequency of parents' appearance, to determine the
 		// similarity of children
-		List<Map.Entry<Node, Integer>> sortedfrequentparents = sortParentsByFrequency(similarityparent);
+		// List<Map.Entry<Node, Integer>> sortedfrequentparents =
+		// sortParentsByFrequency(similarityparent);
 
-		// If similarity is low, return
-		// negative p;
-		if (hasHighDiscretion(sortedfrequentparents, 0.1, isLargeCollection)) {
+		// test if similarity is too low
+		if (hasHighDiscretion(similarityparent, STDDEVTHRESHOLD_)) {
 			return -2;
 		}
 
-		if (hasSimilarityBetween(collectionParent, targetNode, 0.1)) {
-			System.out.println("rejected due to high similarity between:"
-					+ targetNode.getName() + " " + collectionParent.getName());
-			return -1 * disjointcount;
-		}
+		// if (hasSimilarityBetween(collectionParent, targetNode, 0.1)) {
+		// System.out.println("rejected due to high similarity between:"
+		// + targetNode.getName() + " " + collectionParent.getName());
+		// return -1 * disjointcount;
+		// }
+
 		return disjointcount;
+	}
+
+	
+	private boolean isNotDirectlyDisjointed(Node targetNode, Node child) {
+		QueryObject qo = new QueryObject(
+				CommonConcepts.DISJOINTWITH.getNode(dag_), targetNode, child);
+		queryModule_.applyModule(
+				CommonConcepts.ASSERTED_SENTENCE.getNodeName(), qo);
+		if (qo.getJustification().isEmpty()) {
+			return true;
+		} else {
+			return false;
+		}
+	}
+
+	private void updateSimilarityParentData(
+			Map<Node, Integer> similarityparent, Node node) {
+		// get all parents(genls/isa) for this child
+		Collection<Node> allparents = CommonQuery.ALLGENLS.runQuery(dag_, node);
+		// allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, child));
+
+		// Count number of appearance of each parent
+		int t = 0;
+		for (Node parent : allparents) {
+			if (similarityparent.containsKey(parent)) {
+				t = similarityparent.get(parent) + 1;
+				similarityparent.put(parent, t);
+			} else {
+				similarityparent.put(parent, 1);
+			}
+		}
 	}
 
 	// Sort and return a list of parents by their frequency
@@ -371,22 +419,19 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 
 	// Test the discretion of the parents of the collection,return true if
 	// discretion is high
-	private boolean hasHighDiscretion(
-			List<Map.Entry<Node, Integer>> sortedfrequentparents,
-			double deviationthreshold, boolean islargecollection) {
+	private boolean hasHighDiscretion(Map<Node, Integer> sortedfrequentparents,
+			double deviationthreshold) {
 		// Calculate mean
 		double mean = 0;
-		int colsize = islargecollection ? sortedfrequentparents.size() - 1
-				: sortedfrequentparents.size();
-		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
-			mean += sortedfrequentparents.get(i).getValue();
+		int colsize = sortedfrequentparents.size() - 1;
+		for (Map.Entry<Node, Integer> e : sortedfrequentparents.entrySet()) {
+			mean += e.getValue();
 		}
 		mean /= colsize;
 		// Calculate variance
 		double variance = 0;
-		for (int i = sortedfrequentparents.size() - 1; i > 0; i--) {
-			variance += Math.pow(
-					sortedfrequentparents.get(i).getValue() - mean, 2);
+		for (Map.Entry<Node, Integer> e : sortedfrequentparents.entrySet()) {
+			variance += Math.pow(e.getValue() - mean, 2);
 		}
 		System.out.println("stdDev:" + Math.sqrt(variance / colsize));
 		if (Math.sqrt(variance / colsize) > deviationthreshold) {
