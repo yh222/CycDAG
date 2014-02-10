@@ -240,34 +240,36 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// Use the count of disjoint found between collectionParent's
 		// children and targetNode, and the amount of child to decide if
 		// collectionParent disjoint with targetNode
-		boolean isDisjointed = false;
-		double p = (double) countChildrenStatDisjointed(collectionParent,
-				children, targetNode, roundedchildrensize)
-				/ roundedchildrensize;
 
-		if (p > THEP_) {
-			isDisjointed = true;
-		}
-
-		saveAndPrintOutput(creator, collectionParent, targetNode, children,
-				roundedchildrensize, isDisjointed, p);
+		saveAndPrintOutput(
+				creator,
+				collectionParent,
+				targetNode,
+				children,
+				roundedchildrensize,
+				countChildrenStatDisjointed(collectionParent, children,
+						targetNode, roundedchildrensize));
 	}
 
 	// Save the disjoint(if found one) and print other stats
 	private void saveAndPrintOutput(Node creator, Node collectionParent,
 			Node targetNode, List<Node> children, int roundedchildrensize,
-			boolean isDisjointed, double p) {
+			int count) {
 		// TODO: for debug
-		if (p * roundedchildrensize == -2) {
+		double p = (double) count / roundedchildrensize;
+		if (count == -2) {
 			System.out.println("Evidence rejected due to lack of similarity:"
 					+ collectionParent.getName());
 			rejectedEvidences_.add(collectionParent);
-		} else if (p * roundedchildrensize > -1
-				&& p * roundedchildrensize < THEP_ * -1) {
+		} else if (count == -4) {
+			System.out
+					.println("Evidence target rejected due to lack of similarity:"
+							+ collectionParent.getName());
+			rejectedEvidences_.add(collectionParent);
+		} else if (count > -1 && count < THEP_ * -1) {
 			System.out.println("Possible child:" + targetNode.getName()
 					+ " is child of " + collectionParent.getName());
-		}
-		if (isDisjointed) {
+		} else if (p > THEP_) {
 			System.out.println("Disjoint added btween:"
 					+ collectionParent.getName() + " " + targetNode.getName()
 					+ ", with p=" + p + ", Sample size=" + children.size());
@@ -326,7 +328,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				child = children.get(i);
 			}
 
-			updateSimilarityParentData(similarityparent, child);
+			updateSimilarityData(similarityparent, child);
 			// if child disjoint with targetNode, count++
 			if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
 					targetNode, child)
@@ -357,6 +359,27 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			return -2;
 		}
 
+		List<Node> targetchildren = new ArrayList<Node>(
+				CommonQuery.MAXSPECS.runQuery(dag_, targetNode));
+		isLargeCollection = targetchildren.size() > MAXCHILDEXPLORATION_;
+		Map<Node, Integer> similaritytarget = new HashMap<Node, Integer>();
+		int i = isLargeCollection ? MAXCHILDEXPLORATION_ : targetchildren
+				.size();
+		for (i = i - 1; i > 0; i--) {
+			Node child;
+			// Random sampling or iterate through the whole
+			if (isLargeCollection) {
+				child = targetchildren
+						.get(random.nextInt(MAXCHILDEXPLORATION_));
+			} else {
+				child = targetchildren.get(i);
+			}
+			updateSimilarityData(similaritytarget, child);
+		}
+		if (hasHighDiscretion(similaritytarget, STDDEVTHRESHOLD_)) {
+			return -4;
+		}
+
 		// if (hasSimilarityBetween(collectionParent, targetNode, 0.1)) {
 		// System.out.println("rejected due to high similarity between:"
 		// + targetNode.getName() + " " + collectionParent.getName());
@@ -366,7 +389,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		return disjointcount;
 	}
 
-	
 	private boolean isNotDirectlyDisjointed(Node targetNode, Node child) {
 		QueryObject qo = new QueryObject(
 				CommonConcepts.DISJOINTWITH.getNode(dag_), targetNode, child);
@@ -379,8 +401,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		}
 	}
 
-	private void updateSimilarityParentData(
-			Map<Node, Integer> similarityparent, Node node) {
+	private void updateSimilarityData(Map<Node, Integer> similaritydata,
+			Node node) {
 		// get all parents(genls/isa) for this child
 		Collection<Node> allparents = CommonQuery.ALLGENLS.runQuery(dag_, node);
 		// allparents.addAll(CommonQuery.ALLISA.runQuery(dag_, child));
@@ -388,11 +410,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		// Count number of appearance of each parent
 		int t = 0;
 		for (Node parent : allparents) {
-			if (similarityparent.containsKey(parent)) {
-				t = similarityparent.get(parent) + 1;
-				similarityparent.put(parent, t);
+			if (similaritydata.containsKey(parent)) {
+				t = similaritydata.get(parent) + 1;
+				similaritydata.put(parent, t);
 			} else {
-				similarityparent.put(parent, 1);
+				similaritydata.put(parent, 1);
 			}
 		}
 	}
@@ -434,7 +456,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			variance += Math.pow(e.getValue() - mean, 2);
 		}
 		System.out.println("stdDev:" + Math.sqrt(variance / colsize));
-		if (Math.sqrt(variance / colsize) > deviationthreshold) {
+		if (Math.sqrt(variance / colsize) > deviationthreshold
+				|| Math.sqrt(variance / colsize) <= 0) {
 			return true;
 		}
 		return false;
