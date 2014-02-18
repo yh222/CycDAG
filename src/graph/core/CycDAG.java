@@ -31,6 +31,9 @@ import util.BooleanFlags;
 import util.UtilityMethods;
 
 public class CycDAG extends DirectedAcyclicGraph {
+	private static final Pattern CONCEPT_PATTERN = Pattern
+			.compile("\\[?#\\$([\\w-:]+[\\w])\\]?");
+
 	private static final Node CYC_IMPORT = new StringNode("CYCImport");
 
 	private static final Node FORWARD_CHAIN = new StringNode("ForwardChain");
@@ -41,6 +44,9 @@ public class CycDAG extends DirectedAcyclicGraph {
 
 	private static final Pattern CODE_PATTERN = Pattern
 			.compile("<code>.+?</code>");
+
+	private static final Pattern UNCODED_PATTERN = Pattern
+			.compile("(?<!<code>)\\(#\\$\\S+( ((#\\$\\S+)|[^a-z\\s]+))+\\)");
 
 	private transient QueryModule querier_;
 
@@ -78,8 +84,19 @@ public class CycDAG extends DirectedAcyclicGraph {
 			Node constraint = sub.getSubstitution(VariableNode.DEFAULT);
 			if (constraint.equals(CommonConcepts.THING.getNode(this)))
 				continue;
-			if (!querier_.prove(argQuery.getNode(this),
-					querier_.getExpanded(testNode), constraint)) {
+
+			// Special case for StringNodes and PrimitiveNodes
+			boolean meetsConstraint = false;
+			// Special case for string nodes
+			if (testNode instanceof StringNode
+					&& argQuery.getNode(this).equals(
+							CommonConcepts.ISA.getNode(this)))
+				meetsConstraint = querier_.proveIsString(testNode, constraint);
+			else if (!meetsConstraint)
+				meetsConstraint = querier_.prove(argQuery.getNode(this),
+						querier_.getExpanded(testNode), constraint);
+
+			if (!meetsConstraint) {
 				if (forwardEdges != null) {
 					// Create new edge to meet constraint
 					Edge forwardEdge = findOrCreateEdge(FORWARD_CHAIN,
@@ -274,6 +291,34 @@ public class CycDAG extends DirectedAcyclicGraph {
 	}
 
 	@Override
+	public Node[] parseNodes(String strNodes, Node creator,
+			boolean createNodes, boolean dagNodeOnly) {
+		// TODO Check this
+		return parseNodes(strNodes, creator, createNodes, dagNodeOnly, true);
+	}
+
+	public Node[] parseNodes(String strNodes, Node creator,
+			boolean createNodes, boolean dagNodeOnly, boolean allowVariables) {
+		if (strNodes.startsWith("("))
+			strNodes = UtilityMethods.shrinkString(strNodes, 1);
+		ArrayList<String> split = UtilityMethods.split(strNodes, ' ');
+
+		Node[] nodes = new Node[split.size()];
+		int i = 0;
+		for (String arg : split) {
+			if (!allowVariables && arg.startsWith("?"))
+				return null;
+			nodes[i] = findOrCreateNode(arg, creator, createNodes, false,
+					dagNodeOnly, allowVariables);
+
+			if (nodes[i] == null)
+				return null;
+			i++;
+		}
+		return nodes;
+	}
+
+	@Override
 	public synchronized Node findOrCreateNode(String nodeStr, Node creator,
 			boolean... flags) {
 		BooleanFlags bFlags = nodeFlags_.loadFlags(flags);
@@ -288,7 +333,7 @@ public class CycDAG extends DirectedAcyclicGraph {
 		if (nodeStr.startsWith("(")) {
 			FunctionIndex functionIndexer = (FunctionIndex) getModule(FunctionIndex.class);
 			Node[] subNodes = parseNodes(nodeStr, creator, createNew,
-					allowVariables);
+					dagNodeOnly, allowVariables);
 			if (subNodes != null
 					&& (!createNew || semanticArgCheck(subNodes, null, false,
 							bFlags.getFlag("ephemeral")))) {
@@ -395,28 +440,11 @@ public class CycDAG extends DirectedAcyclicGraph {
 					continue;
 				}
 
-				Node[] nodes = parseNodes(split[0], creator, true, false);
+				Node[] nodes = parseNodes(split[0], creator, true, false, false);
 				if (nodes != null) {
 					// Comment cleaning
 					if (nodes[0].equals(CommonConcepts.COMMENT.getNode(this))) {
-						String comment = nodes[2].toString();
-						// Remove #$ in code tags
-						Matcher m = CODE_PATTERN.matcher(comment);
-						StringBuffer replComment = new StringBuffer();
-						int start = 0;
-						while (m.find()) {
-							int end = m.start();
-							replComment.append(comment.substring(start, end));
-							replComment
-									.append(m.group().replaceAll("#\\$", ""));
-							start = m.end();
-						}
-						replComment.append(comment.substring(start,
-								comment.length()));
-
-						// Markup #$
-						comment = replComment.toString().replaceAll(
-								"\\[?#\\$([\\w-:]+[\\w])\\]?", "[[$1]]");
+						nodes[2] = processComment(nodes);
 					}
 
 					String microtheory = (split.length == 2) ? split[1]
@@ -437,6 +465,45 @@ public class CycDAG extends DirectedAcyclicGraph {
 				+ duplicateCount + "\n");
 
 		reader.close();
+	}
+
+	private StringNode processComment(Node[] nodes) {
+		String comment = nodes[2].toString();
+		// Find uncoded expressions
+		Matcher m = UNCODED_PATTERN.matcher(comment);
+		comment = m.replaceAll("<code>$0</code>");
+
+		// Remove #$ in code tags
+		m = CODE_PATTERN.matcher(comment);
+		StringBuffer replComment = new StringBuffer();
+		int start = 0;
+		while (m.find()) {
+			int end = m.start();
+			replComment.append(comment.substring(start, end));
+			replComment.append(m.group().replaceAll("#\\$", ""));
+			start = m.end();
+		}
+		replComment.append(comment.substring(start, comment.length()));
+
+		// Markup #$ tagged non-commented concepts (with depluralisation)
+		comment = replComment.toString();
+		m = CONCEPT_PATTERN.matcher(comment);
+		replComment = new StringBuffer();
+		start = 0;
+		while (m.find()) {
+			int end = m.start();
+			replComment.append(comment.substring(start, end));
+			String concept = m.group(1);
+			if (findDAGNode(concept) == null) {
+				if (findDAGNode(concept.substring(0, concept.length() - 1)) != null)
+					concept = concept.substring(0, concept.length() - 1);
+			}
+			replComment.append("[[" + concept + "]]");
+			start = m.end();
+		}
+		replComment.append(comment.substring(start, comment.length()));
+
+		return new StringNode(replComment.toString());
 	}
 
 	/**

@@ -142,9 +142,8 @@ public class TransitiveIntervalSchemaModuleTest {
 		// Existing nodes
 		dag_.noChecks_ = true;
 		assertFalse(dag_.findOrCreateEdge(creator, new Node[] { genls, canis, fluffy }, false) instanceof ErrorEdge);
-		sut_.initialisationComplete(dag_.getNodes(), dag_.getEdges(), true);
 		assertNotNull(sut_.execute(true, canis, fluffy));
-		assertNotNull(sut_.execute(false, fluffy,dog));
+		assertNotNull(sut_.execute(true, dog, fluffy));
 		assertTrue(sut_.execute(true, dog).contains(fluffy));
 		assertFalse(sut_.execute(true, cat).contains(dog));
 		assertFalse(sut_.execute(true, dog).contains(cat));
@@ -155,7 +154,6 @@ public class TransitiveIntervalSchemaModuleTest {
 		// Tree addition (genls Mammal Animal)
 		DAGNode animal = (DAGNode) dag_.findOrCreateNode("Animal", creator, true);
 		assertFalse(dag_.findOrCreateEdge(creator, new Node[] { genls, mammal, animal }, false) instanceof ErrorEdge);
-		sut_.initialisationComplete(dag_.getNodes(), dag_.getEdges(), true);
 		assertNotNull(sut_.execute(true, mammal, animal));
 		assertNotNull(sut_.execute(true, dog, animal));
 		assertNotNull(sut_.execute(true, cat, animal));
@@ -163,7 +161,6 @@ public class TransitiveIntervalSchemaModuleTest {
 		// Non-tree addition (genls Cow Mammal)
 		DAGNode cow = (DAGNode) dag_.findOrCreateNode("Cow", creator, true);
 		assertFalse(dag_.findOrCreateEdge(creator, new Node[] { genls, cow, mammal }, false) instanceof ErrorEdge);
-		sut_.initialisationComplete(dag_.getNodes(), dag_.getEdges(), true);
 		assertNotNull(sut_.execute(true, cow, mammal));
 		assertNotNull(sut_.execute(true, cow, animal));
 		assertNotNull(sut_.execute(true, cow, thing));
@@ -186,8 +183,6 @@ public class TransitiveIntervalSchemaModuleTest {
 		dag_.noChecks_ = true;
 		Edge edge = dag_.findEdge(genls, dog, canis);
 		assertTrue(dag_.removeEdge(edge));
-		sut_.initialisationComplete(dag_.getNodes(), dag_.getEdges(), true);
-		
 		assertNull(sut_.execute(true, dog, canis));
 		assertNull(sut_.execute(true, dog, mammal));
 		assertNotNull(sut_.execute(true, dog, pet));
@@ -199,7 +194,6 @@ public class TransitiveIntervalSchemaModuleTest {
 		// Removal of a non-tree edge
 		edge = dag_.findEdge(genls, pet, thing);
 		assertTrue(dag_.removeEdge(edge));
-		sut_.initialisationComplete(dag_.getNodes(), dag_.getEdges(), true);
 		assertNull(sut_.execute(true, pet, thing));
 		assertNotNull(sut_.execute(true, dog, thing));
 	}
