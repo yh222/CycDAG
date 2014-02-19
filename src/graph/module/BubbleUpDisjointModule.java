@@ -491,6 +491,8 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					CommonQuery.MAXSPECS.runQuery(dag_, inputNode));
 			if (children.isEmpty()) {
 				return false;
+			}else if (children.size()>MAXCHILDEXPLORATION_){
+				return true;
 			}
 
 			boolean isLargeCollection = children.size() > MAXCHILDEXPLORATION_;
@@ -520,7 +522,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 					}
 				}
 			}
-			meanSim /= Math.pow(roundedchildrensize - 1, 2);
+			meanSim /= Math.pow(2, roundedchildrensize - 1);
 			out.println(inputNode.getName() + " meanSim:" + meanSim);
 			if (meanSim > MEANSIMILARITYTHRESHOLD) {
 				acceptedEvidences_.add(inputNode);
