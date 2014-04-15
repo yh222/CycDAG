@@ -1,3 +1,13 @@
+/*******************************************************************************
+ * Copyright (c) 2013 University of Waikato, Hamilton, New Zealand.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the GNU Public License v3.0
+ * which accompanies this distribution, and is available at
+ * http://www.gnu.org/licenses/gpl.html
+ * 
+ * Contributors:
+ *     Sam Sarjant - initial API and implementation
+ ******************************************************************************/
 package graph.core.cli;
 
 import graph.core.CycDAG;
@@ -6,13 +16,13 @@ import graph.core.Edge;
 import graph.core.ErrorEdge;
 import graph.core.Node;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.ArrayList;
+
+import org.apache.commons.lang3.StringUtils;
+
+import util.UtilityMethods;
 
 public class AddCycEdgeCommand extends AddEdgeCommand {
-	private static final Pattern ARG_PATTERN = Pattern
-			.compile("^(\\(.+?\\))(?::(\\S+))?(?: \\((.+?)\\))?$");
-
 	@Override
 	public String helpText() {
 		return "{0} (node node ...)[:MT] [(creator)] : Creates an edge "
@@ -28,31 +38,28 @@ public class AddCycEdgeCommand extends AddEdgeCommand {
 			return;
 		}
 
-		Matcher m = ARG_PATTERN.matcher(data);
-		if (!m.matches()) {
-			print("-1|Could not parse arguments.\n");
-			return;
-		}
+		ArrayList<String> split = UtilityMethods.split(data, ' ');
+
+		// Extract microtheory (if one exists)
+		ArrayList<String> edgeMt = UtilityMethods.split(split.get(0), ':');
+		String edgeStr = edgeMt.get(0);
+		String microtheory = (edgeMt.size() > 1) ? StringUtils.join(
+				edgeMt.subList(1, edgeMt.size()), ':') : null;
 
 		Node creator = null;
-		if (m.group(3) != null) {
+		if (split.size() > 1) {
 			try {
-				creator = dagHandler.getDAG().findOrCreateNode(m.group(3),
-						creator);
+				creator = dagHandler.getDAG().findOrCreateNode(
+						UtilityMethods.shrinkString(split.get(1), 1), creator);
 			} catch (Exception e) {
 				print("-1|Invalid creator node.\n");
 				return;
 			}
 		}
 
-		String microtheory = null;
-		if (m.group(2) != null) {
-			microtheory = m.group(2);
-		}
-
 		try {
 			Node[] nodes = dagHandler.getDAG().parseNodes(
-					m.group(1),
+					edgeStr,
 					creator,
 					dagHandler.get(DAGPortHandler.DYNAMICALLY_ADD_NODES)
 							.equals("true"), false);
@@ -62,8 +69,12 @@ public class AddCycEdgeCommand extends AddEdgeCommand {
 			}
 			boolean[] flags = dagHandler
 					.asBooleanArray(DAGPortHandler.EDGE_FLAGS);
+			if (flags.length < 1)
+				flags = new boolean[1];
+			flags[0] = true;
 			Edge edge = ((CycDAG) dagHandler.getDAG()).findOrCreateEdge(
-					creator, nodes, microtheory, flags);
+					nodes, creator, microtheory, flags);
+			dagHandler.getDAG().writeCommand("addedge " + data);
 
 			if (edge instanceof ErrorEdge) {
 				print("-1|" + ((ErrorEdge) edge).getError() + "\n");

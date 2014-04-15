@@ -5,6 +5,8 @@
 	<classpathentry kind="lib" path="lib/joda-time-2.3.jar"/>
 	<classpathentry kind="lib" path="lib/commons-collections4-4.0-alpha1.jar"/>
 	<classpathentry kind="lib" path="lib/commons-lang3-3.1.jar"/>
+	<classpathentry kind="lib" path="lib/logback-classic-1.1.0.jar"/>
+	<classpathentry kind="lib" path="lib/logback-core-1.1.0.jar"/>
 	<classpathentry kind="lib" path="lib/DagYo.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>

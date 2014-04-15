@@ -18,27 +18,33 @@ import org.apache.commons.lang3.StringUtils;
 
 public class OntologyFunction extends DAGNode implements Edge {
 	private static final long serialVersionUID = 473544398260462641L;
-	private Boolean anonymous_;
+	private boolean notAnonymous_ = true;
 	protected Node[] nodes_;
 
 	public OntologyFunction() {
 		super();
 	}
 
-	public OntologyFunction(boolean anonymous, Node... nodes) {
+	public OntologyFunction(Node... nodes) {
 		super();
 		nodes_ = nodes;
-		anonymous_ = anonymous;
-		if (anonymous_)
-			id_ = -1;
+		notAnonymous_ = false;
+		id_ = requestID();
 	}
 
-	public OntologyFunction(DirectedAcyclicGraph dag, Node... nodes) {
+	protected OntologyFunction(DirectedAcyclicGraph dag, Node... nodes) {
 		super();
 		nodes_ = nodes;
-		anonymous_ = checkIfAnonymous(dag);
-		if (anonymous_)
-			id_ = -1;
+		notAnonymous_ = !checkIfAnonymous(dag);
+		id_ = requestID();
+	}
+
+	@Override
+	protected int requestID() {
+		// Default to -1, unless not anonymous
+		if (notAnonymous_)
+			return super.requestID();
+		return -1;
 	}
 
 	private boolean checkIfAnonymous(DirectedAcyclicGraph dag) {
@@ -49,9 +55,11 @@ public class OntologyFunction extends DAGNode implements Edge {
 		if (queryModule.prove(CommonConcepts.ISA.getNode(dag), nodes_[0],
 				CommonConcepts.UNREIFIABLE_FUNCTION.getNode(dag)))
 			return true;
-		if (!queryModule.prove(CommonConcepts.ISA.getNode(dag), nodes_[0],
-				CommonConcepts.FUNCTION.getNode(dag)))
-			return true;
+		// TODO Need to put this back in. But can't for now due to DAGrecreate
+		// loading.
+		// if (!queryModule.prove(CommonConcepts.ISA.getNode(dag), nodes_[0],
+		// CommonConcepts.FUNCTION.getNode(dag)))
+		// return true;
 		return false;
 	}
 
@@ -74,6 +82,8 @@ public class OntologyFunction extends DAGNode implements Edge {
 
 	@Override
 	public boolean equals(Object obj) {
+		if (obj == null)
+			return false;
 		if (this == obj)
 			return true;
 		if (getClass() != obj.getClass())
@@ -86,7 +96,12 @@ public class OntologyFunction extends DAGNode implements Edge {
 
 	@Override
 	public String getIdentifier() {
-		if (id_ != -1)
+		return getIdentifier(false);
+	}
+	
+	@Override
+	public String getIdentifier(boolean useName) {
+		if (id_ != -1 && !useName)
 			return id_ + "";
 
 		StringBuffer buffer = new StringBuffer("(");
@@ -94,7 +109,7 @@ public class OntologyFunction extends DAGNode implements Edge {
 		for (Node n : nodes_) {
 			if (!first)
 				buffer.append(" ");
-			buffer.append(n.getIdentifier());
+			buffer.append(n.getIdentifier(useName));
 			first = false;
 		}
 		buffer.append(")");
@@ -120,7 +135,7 @@ public class OntologyFunction extends DAGNode implements Edge {
 
 	@Override
 	public boolean isAnonymous() {
-		return anonymous_;
+		return !notAnonymous_;
 	}
 
 	@Override

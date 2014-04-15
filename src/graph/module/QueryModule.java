@@ -35,6 +35,7 @@ import graph.inference.module.TransitiveWorker;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class QueryModule extends DAGModule<Collection<Substitution>> {
@@ -118,6 +119,13 @@ public class QueryModule extends DAGModule<Collection<Substitution>> {
 				QueryObject instantiated = queryObj.modifyNodes(variableMatch,
 						variableMatch.applySubstitution(nodes));
 				applyModule(module, instantiated);
+				List<Node[]> justification = instantiated.getJustification();
+				if (!justification.isEmpty()) {
+					for (Node[] step : justification) {
+						if (!queryObj.getJustification().contains(step))
+							queryObj.getJustification().add(step);
+					}
+				}
 			}
 
 			return queryObj.getResults();
@@ -239,12 +247,10 @@ public class QueryModule extends DAGModule<Collection<Substitution>> {
 		if (primitive.intValue() == 0)
 			return CommonConcepts.ZERO.getNode(dag_);
 		else if (primitive.intValue() > 0)
-			return new OntologyFunction(false,
-					CommonConcepts.THE_FN.getNode(dag_),
+			return new OntologyFunction(CommonConcepts.THE_FN.getNode(dag_),
 					CommonConcepts.POSITIVE_NUMBER.getNode(dag_));
 		else
-			return new OntologyFunction(false,
-					CommonConcepts.THE_FN.getNode(dag_),
+			return new OntologyFunction(CommonConcepts.THE_FN.getNode(dag_),
 					CommonConcepts.NEGATIVE_NUMBER.getNode(dag_));
 	}
 
@@ -252,17 +258,15 @@ public class QueryModule extends DAGModule<Collection<Substitution>> {
 		if (primitive.intValue() == 0)
 			return CommonConcepts.ZERO.getNode(dag_);
 		else if (primitive.intValue() > 0)
-			return new OntologyFunction(false,
-					CommonConcepts.THE_FN.getNode(dag_),
+			return new OntologyFunction(CommonConcepts.THE_FN.getNode(dag_),
 					CommonConcepts.POSITIVE_INTEGER.getNode(dag_));
 		else
-			return new OntologyFunction(false,
-					CommonConcepts.THE_FN.getNode(dag_),
+			return new OntologyFunction(CommonConcepts.THE_FN.getNode(dag_),
 					CommonConcepts.NEGATIVE_INTEGER.getNode(dag_));
 	}
 
 	private DAGNode stringToDAGNode(String name) {
-		return new OntologyFunction(false, CommonConcepts.THE_FN.getNode(dag_),
+		return new OntologyFunction(CommonConcepts.THE_FN.getNode(dag_),
 				CommonConcepts.STRING.getNode(dag_));
 	}
 

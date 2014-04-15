@@ -35,7 +35,7 @@ public class NLPCommand extends Command {
 
 	@Override
 	public String shortDescription() {
-		return "Produces a NLP description of a node, edge, query, or marked-up string.";
+		return "Converts a node, edge, query, or marked-up string to NLP form.";
 	}
 
 	@Override
@@ -78,7 +78,7 @@ public class NLPCommand extends Command {
 			result = nlpModule.execute(markup, dagObject);
 		} else if (typeStr.equals("E")) {
 			if (nlpData.matches("\\d+"))
-				dagObject = dag.getEdgeByID(Long.parseLong(nlpData));
+				dagObject = dag.getEdgeByID(Integer.parseInt(nlpData));
 			else
 				dagObject = dag.parseNodes(nlpData, null, false, false);
 			result = nlpModule.execute(markup, dagObject);

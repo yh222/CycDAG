@@ -16,7 +16,6 @@ import graph.core.Node;
 import graph.core.OntologyFunction;
 
 import java.util.Collection;
-import java.util.Set;
 
 import util.collection.Trie;
 
@@ -51,7 +50,7 @@ public class FunctionIndex extends DAGModule<OntologyFunction> {
 	}
 
 	public OntologyFunction findFunction(Node[] args) {
-		Set<OntologyFunction> vals = index_.getValue(args, 0, null, false);
+		Collection<OntologyFunction> vals = index_.getValue(args, 0, null, false);
 		if (vals == null || vals.isEmpty())
 			return null;
 		OntologyFunction func = vals.iterator().next();
@@ -74,7 +73,7 @@ public class FunctionIndex extends DAGModule<OntologyFunction> {
 
 	@Override
 	public String toString() {
-		return index_.toString();
+		return "Function Index Module: " + index_.toString();
 	}
 
 	public Collection<OntologyFunction> getAllFunctions(DAGNode functionNode) {

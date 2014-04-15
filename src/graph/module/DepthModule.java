@@ -13,7 +13,6 @@ package graph.module;
 import graph.core.CommonConcepts;
 import graph.core.DAGEdge;
 import graph.core.DAGNode;
-import graph.core.Edge;
 import graph.core.Node;
 import graph.inference.CommonQuery;
 import graph.inference.QueryObject;
@@ -73,7 +72,7 @@ public class DepthModule extends DAGModule<Collection<DAGNode>> {
 	 *            If the node has been seen already in this calculation.
 	 * @return The minimum depth of the above node.
 	 */
-	private int processNode(DAGNode node, HashSet<Long> seen) {
+	private int processNode(DAGNode node, HashSet<Integer> seen) {
 		if (node.equals(CommonConcepts.THING.getNode(dag_))) {
 			dag_.addProperty(node, DEPTH_PROPERTY, "0");
 			depthMap_.put(0, node);
@@ -112,7 +111,7 @@ public class DepthModule extends DAGModule<Collection<DAGNode>> {
 	}
 
 	@Override
-	public boolean addEdge(Edge edge) {
+	public boolean addEdge(DAGEdge edge) {
 		if (!(edge instanceof DAGEdge) || !depthCalculated_)
 			return true;
 
@@ -134,7 +133,7 @@ public class DepthModule extends DAGModule<Collection<DAGNode>> {
 
 			String oldStr = subjectNode.getProperty(DEPTH_PROPERTY);
 			int oldDepth = (oldStr == null) ? -1 : Integer.parseInt(oldStr);
-			int newDepth = processNode(subjectNode, new HashSet<Long>());
+			int newDepth = processNode(subjectNode, new HashSet<Integer>());
 
 			if (newDepth != oldDepth) {
 				// TODO Propagate the changes down.
@@ -170,7 +169,7 @@ public class DepthModule extends DAGModule<Collection<DAGNode>> {
 		// TODO Embarrassingly parallel.
 		for (DAGNode node : nodes) {
 			count++;
-			processNode(node, new HashSet<Long>());
+			processNode(node, new HashSet<Integer>());
 			if (count % tenPercent == 0)
 				System.out.print((count / tenPercent * 10) + "% ");
 		}
@@ -180,7 +179,7 @@ public class DepthModule extends DAGModule<Collection<DAGNode>> {
 	}
 
 	@Override
-	public boolean removeEdge(Edge edge) {
+	public boolean removeEdge(DAGEdge edge) {
 		if (!incrementalSupported_) {
 			System.err.println("Incremental updates not supported "
 					+ "for DepthModule!");

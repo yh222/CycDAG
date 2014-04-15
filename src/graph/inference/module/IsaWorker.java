@@ -11,7 +11,6 @@
 package graph.inference.module;
 
 import graph.core.CommonConcepts;
-import graph.core.DAGEdge;
 import graph.core.DAGNode;
 import graph.core.DirectedAcyclicGraph;
 import graph.core.Edge;
@@ -88,8 +87,8 @@ public class IsaWorker extends QueryWorker {
 				Collection<DAGNode> functionEdges = querier_.functionResults(
 						(OntologyFunction) atomic, CommonConcepts.RESULT_ISA);
 				for (DAGNode funcNode : functionEdges)
-					isas.add(new DAGEdge(CommonConcepts.ISA.getNode(dag_), n,
-							funcNode));
+					isas.add(new OntologyFunction(CommonConcepts.ISA
+							.getNode(dag_), n, funcNode));
 			}
 			for (Edge e : isas) {
 				Node[] edgeNodes = e.getNodes();
