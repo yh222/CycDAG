@@ -3,16 +3,29 @@ package graph.module;
 import graph.core.CommonConcepts;
 import graph.core.DAGEdge;
 import graph.core.DAGNode;
+import graph.core.DAGObject;
 import graph.core.Node;
+import graph.core.StringNode;
 import graph.inference.CommonQuery;
+import graph.inference.QueryObject;
+import graph.inference.Substitution;
+import graph.inference.VariableNode;
 
 import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import util.AliasedObject;
+import util.Pair;
 
 public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
@@ -21,6 +34,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private transient QueryModule queryModule_;
 	private HashMap<String, int[]> relationCounts_;
 
+	
 	@Override
 	public Collection<DAGEdge> execute(Object... arg0)
 			throws IllegalArgumentException, ModuleException {
@@ -58,6 +72,8 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		String[] filenames = new String[] { "part_12.csv", "part_13.csv",
 				"part_14.csv", "part_15.csv", "part_16.csv", "part_17.csv",
 				"part_18.csv", "part_19.csv" };
+		NodeAliasModule aliasModule = (NodeAliasModule) dag_.getModule(NodeAliasModule.class);
+
 		for (String filename : filenames) {
 			try (BufferedReader br = new BufferedReader(
 					new FileReader(filename))) {
@@ -76,7 +92,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
 						pattern = Pattern.compile(",\\/c\\/en\\/([^\\,]+?)\\/");
 						matcher = pattern.matcher(data);
-						if (matcher.find()) {
+						if (matcher.find() /*&& relationName.equals("AtLocation")*/) {
 							// Make first letter uppercase
 							String nodename1 = covertToKMNodeName(matcher
 									.group(1));
@@ -85,7 +101,24 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							// System.out.println("Trying to find node:"
 							// + nodename1);
 							if (n1 == null) {
-								continue;
+								Collection<DAGNode> nodes = aliasModule.findNodes(nodename1, false, true);
+//								Collection<DAGNode> filteredNodes = new ArrayList<>();
+//								Node[] args = dag_.parseNodes("(prettyString-Canonical ?X \""+ nodename1+"\")", null, false, false);
+//
+//								for (DAGNode node : nodes) {
+//									Substitution substitution = new Substitution("?X", node);
+//									boolean satisfies = queryModule_.prove(substitution.applySubstitution(args));
+//									if (satisfies) {
+//										filteredNodes.add(node);
+//									}
+//								}
+								
+								if(nodes.size()==1){
+									n1=(DAGNode) nodes.toArray()[0];
+									System.out.println(nodename1+" is defined as "+n1.getName());
+								}else{
+									continue;
+								}
 							}
 
 							matcher.find();
@@ -97,38 +130,72 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							// System.out.println("Trying to find node:"
 							// + nodename2);
 							if (n2 == null) {
-								continue;
+								Collection<DAGNode> nodes = aliasModule.findNodes(nodename2, false, true);
+								
+								if(nodes.size()==1){
+									n2=(DAGNode) nodes.toArray()[0];
+									System.out.println(nodename2+" is defined as "+n2.getName());
+								}else{
+									continue;
+								}
 							}
 
 							checkorAddRelation(relationName);
-							Collection<Node> minGenls1 = CommonQuery.MINGENLS
+							Collection<Node> minGenls1 = CommonQuery.DIRECTGENLS
 									.runQuery(dag_, n1);
-							minGenls1.clear();
-							minGenls1.add(n1);
-							Collection<Node> minGenls2 = CommonQuery.MINGENLS
+							if (minGenls1.size() == 0) {
+								minGenls1.addAll(CommonQuery.MINISA.runQuery(
+										dag_, n1));
+							} else {
+								minGenls1.clear();
+								minGenls1.add(n1);
+							}
+
+							Collection<Node> minGenls2 = CommonQuery.DIRECTGENLS
 									.runQuery(dag_, n2);
-							minGenls2.clear();
-							minGenls2.add(n2);
-							for (Node c1 : minGenls1) {
-								for (Node c2 : minGenls2) {
-									if (!c1.equals(c2)) {
-										if (queryModule_.prove(
-												CommonConcepts.DISJOINTWITH
-														.getNode(dag_), c1, c2)) {
-											System.out.println(relationName+": "+c1.getName()
-													+ " disjoint to "
-													+ c2.getName());
-											relationCounts_.get(relationName)[0]++;
-										} else if (transitiveModule_.execute(
-												true, c1, c2) != null
-												|| transitiveModule_.execute(
-														false, c1, c2) != null) {
-											relationCounts_.get(relationName)[1]++;
-											System.out.println(relationName+": "+c1.getName()
-													+ " conjoint to "
-													+ c2.getName());
-										} else {
-											relationCounts_.get(relationName)[2]++;
+							if (minGenls2.size() == 0) {
+								minGenls2.addAll(CommonQuery.MINISA.runQuery(
+										dag_, n2));
+							} else {
+								minGenls2.clear();
+								minGenls2.add(n2);
+							}
+							// queryModule_.
+							try (PrintWriter out = new PrintWriter(
+									new BufferedWriter(new FileWriter(
+											"newDisjoints.txt", true)))) {
+								for (Node c1 : minGenls1) {
+									for (Node c2 : minGenls2) {
+										if (!c1.equals(c2)) {
+											if (queryModule_.prove(
+													CommonConcepts.DISJOINTWITH
+															.getNode(dag_), c1,
+													c2)) {
+												System.out.println(relationName
+														+ ": " + c1.getName()
+														+ " disjoint to "
+														+ c2.getName());
+												relationCounts_
+														.get(relationName)[0]++;
+											} else if (transitiveModule_
+													.execute(true, c1, c2) != null
+													|| transitiveModule_
+															.execute(false, c1,
+																	c2) != null) {
+												relationCounts_
+														.get(relationName)[1]++;
+												System.out.println(relationName
+														+ ": " + c1.getName()
+														+ " conjoint to "
+														+ c2.getName());
+											} else {
+												relationCounts_
+														.get(relationName)[2]++;
+												// Create disjoint
+												out.println(c1.getName()
+														+ " disjointWith "
+														+ c2.getName());
+											}
 										}
 									}
 								}
@@ -142,6 +209,30 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			}
 		}
 
+	}
+
+	private Node getDeepestIsAParent(DAGNode n1) {
+		Collection<Node> r = CommonQuery.MINISA.runQuery(dag_, n1);
+		Node deepest = null;
+		int max = 0;
+		int d;
+		for (Node n : r) {
+
+			if (((DAGObject) n).getProperty("depth") == null)
+				continue;
+
+			d = Integer.parseInt(((DAGNode) n).getProperty("depth"));
+
+			if (deepest == null) {
+				deepest = n;
+				max = d;
+			} else if (d > max) {
+				deepest = n;
+				max = d;
+			}
+		}
+		System.out.println(n1.getName() + "'s deep p is " + deepest.getName());
+		return deepest;
 	}
 
 	private String covertToKMNodeName(String group) {
