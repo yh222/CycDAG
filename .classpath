@@ -8,5 +8,6 @@
 	<classpathentry kind="lib" path="lib/logback-classic-1.1.0.jar"/>
 	<classpathentry kind="lib" path="lib/logback-core-1.1.0.jar"/>
 	<classpathentry kind="lib" path="lib/DagYo.jar"/>
+	<classpathentry kind="lib" path="lib/WMIConnect.jar"/>
 	<classpathentry kind="output" path="bin"/>
 </classpath>
