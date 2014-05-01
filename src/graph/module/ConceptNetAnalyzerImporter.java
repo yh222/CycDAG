@@ -37,7 +37,9 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private static final long serialVersionUID = -2241818554908651866L;
 	private transient TransitiveIntervalSchemaModule transitiveModule_;
 	private transient QueryModule queryModule_;
+	private transient NodeAliasModule aliasModule_;
 	private HashMap<String, int[]> relationCounts_;
+	private transient HashMap<String, String> dummyDisjoints_;
 	private transient WMISocket wmiSocket_;
 
 	@Override
@@ -54,6 +56,9 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 				.getModule(TransitiveIntervalSchemaModule.class);
 		queryModule_ = (QueryModule) dag_.getModule(QueryModule.class);
 		relationCounts_ = new HashMap<String, int[]>();
+		dummyDisjoints_ = new HashMap<String, String>();
+		aliasModule_ = (NodeAliasModule) dag_.getModule(NodeAliasModule.class);
+
 		WMIAccess wmiAcc;
 		try {
 			wmiAcc = new WMIAccess(1, -1);
@@ -99,16 +104,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private void processConcepts() {
 		String line;
 		String[] filenames = new String[] { "part_00.csv", "part_01.csv",
-				"part_02.csv"/*
-							 * , "part_03.csv", "part_04.csv", "part_05.csv",
-							 * "part_06.csv", "part_07.csv", "part_08.csv",
-							 * "part_09.csv", "part_10.csv", "part_11.csv",
-							 * "part_12.csv", "part_13.csv", "part_14.csv",
-							 * "part_15.csv", "part_16.csv", "part_17.csv",
-							 * "part_18.csv", "part_19.csv"
-							 */};
-		NodeAliasModule aliasModule = (NodeAliasModule) dag_
-				.getModule(NodeAliasModule.class);
+				"part_02.csv", "part_03.csv", "part_04.csv", "part_05.csv",
+				"part_06.csv", "part_07.csv", "part_08.csv", "part_09.csv",
+				"part_10.csv", "part_11.csv", "part_12.csv", "part_13.csv",
+				"part_14.csv", "part_15.csv", "part_16.csv", "part_17.csv",
+				"part_18.csv", "part_19.csv" };
 
 		for (String filename : filenames) {
 			try (BufferedReader br = new BufferedReader(
@@ -141,38 +141,8 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							// System.out.println("Trying to find node:"
 							// + nodename1);
 							if (n1 == null) {
-								Collection<DAGNode> nodes = aliasModule
-										.findNodes(nodename1, false, true);
-								// Collection<DAGNode> filteredNodes = new
-								// ArrayList<>();
-								// Node[] args =
-								// dag_.parseNodes("(prettyString-Canonical ?X \""+
-								// nodename1+"\")", null, false, false);
-								//
-								// for (DAGNode node : nodes) {
-								// Substitution substitution = new
-								// Substitution("?X", node);
-								// boolean satisfies =
-								// queryModule_.prove(substitution.applySubstitution(args));
-								// if (satisfies) {
-								// filteredNodes.add(node);
-								// }
-								// }
-
-								if (nodes.size() == 1) {
-									n1 = (DAGNode) nodes.toArray()[0];
-									System.out.println(nodename1
-											+ " is defined as " + n1.getName());
-								} else if (nodes.size() > 1) {
-									System.out.println(nodes);
-									n1 = getConcentratedConcept(nodes.toArray());
-									if (n1 == null) {
-										continue;
-									}
-									System.out.println(nodename1
-											+ " is most likely to be "
-											+ n1.getName());
-								} else {
+								n1 = resolveAmbiguity(nodename1);
+								if (n1 == null) {
 									continue;
 								}
 							}
@@ -186,22 +156,8 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							// System.out.println("Trying to find node:"
 							// + nodename2);
 							if (n2 == null) {
-								Collection<DAGNode> nodes = aliasModule
-										.findNodes(nodename2, false, true);
-
-								if (nodes.size() == 1) {
-									n2 = (DAGNode) nodes.toArray()[0];
-									System.out.println(nodename2
-											+ " is defined as " + n2.getName());
-								} else if (nodes.size() > 1) {
-									n2 = getConcentratedConcept(nodes.toArray());
-									if (n2 == null) {
-										continue;
-									}
-									System.out.println(nodename2
-											+ " is most likely to be "
-											+ n2.getName());
-								} else {
+								n2 = resolveAmbiguity(nodename2);
+								if (n2 == null) {
 									continue;
 								}
 							}
@@ -225,7 +181,6 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 								minGenls2.clear();
 								minGenls2.add(n2);
 							}
-							// queryModule_.
 							try (PrintWriter out = new PrintWriter(
 									new BufferedWriter(new FileWriter(
 											"newDisjoints.txt", true)))) {
@@ -254,12 +209,15 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 														+ " conjoint to "
 														+ c2.getName());
 											} else {
+												if(!dummyDisjoints_.get(c1.getName()).equals(c2.getName())&&!dummyDisjoints_.get(c2.getName()).equals(c1.getName()))
 												relationCounts_
 														.get(relationName)[2]++;
 												// Create disjoint
 												out.println(c1.getName()
 														+ " disjointWith "
 														+ c2.getName());
+												dummyDisjoints_.put(c1.getName(), c2.getName());
+												
 											}
 										}
 									}
@@ -277,21 +235,56 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
 	}
 
-	private DAGNode getConcentratedConcept(Object[] objects) throws IOException {
-		for (Object n : objects) {
-			WeightedSet<Integer> w = wmiSocket_
-					.getWeightedArticles(((DAGNode) n).getName());
-			System.out.println(w);
-			if (w.getMostLikely().size() >= 1) {
-				int key = Integer.parseInt(w.getMostLikely().toArray()[0]
-						.toString());
-				if (w.getWeight(key) >= 0.95) {
-					System.out.println(((DAGNode) n).getName()+" is "+w.getWeight(key));
+	private DAGNode resolveAmbiguity(String nodename) throws IOException {
 
-					return (DAGNode) n;
+		// Collection<DAGNode> filteredNodes = new
+		// ArrayList<>();
+		// Node[] args =
+		// dag_.parseNodes("(prettyString-Canonical ?X \""+
+		// nodename1+"\")", null, false, false);
+		//
+		// for (DAGNode node : nodes) {
+		// Substitution substitution = new
+		// Substitution("?X", node);
+		// boolean satisfies =
+		// queryModule_.prove(substitution.applySubstitution(args));
+		// if (satisfies) {
+		// filteredNodes.add(node);
+		// }
+		// }
+		Collection<DAGNode> nodes = aliasModule_.findNodes(nodename, false,
+				true);
+		DAGNode r;
+		if (nodes.size() == 1) {
+			r = (DAGNode) nodes.toArray()[0];
+			System.out.println(nodename + " is defined as " + r.getName());
+			return r;
+		} else if (nodes.size() > 1) {
+			System.out.println(nodes);
+			r = getConcentratedConcept(nodename, nodes);
+			System.out.println(nodename + " is most likely to be "
+					+ r.getName());
+		}
+		return null;
+	}
+
+	private DAGNode getConcentratedConcept(String nodename,
+			Collection<DAGNode> nodes) throws IOException {
+		WeightedSet<Integer> w = wmiSocket_.getWeightedArticles(nodename);
+		System.out.println(w);
+		if (w.size() >= 1) {
+			int key = Integer.parseInt(w.getMostLikely().toArray()[0]
+					.toString());
+			if (w.getWeight(key) >= 0.95) {
+				for (DAGNode n : nodes) {
+					if (queryModule_.prove(
+							CommonConcepts.COLLECTION.getNode(dag_), n))
+						//return the first node which is a collection
+						System.out
+								.println(nodename + " is " + w.getWeight(key));
+					return n;
 				}
 			}
-
 		}
 		return null;
 	}
