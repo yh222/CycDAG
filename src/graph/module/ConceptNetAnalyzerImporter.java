@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -38,9 +39,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private transient TransitiveIntervalSchemaModule transitiveModule_;
 	private transient QueryModule queryModule_;
 	private transient NodeAliasModule aliasModule_;
+	private transient WMISocket wmiSocket_;
 	private HashMap<String, int[]> relationCounts_;
 	private transient HashMap<String, String> dummyDisjoints_;
-	private transient WMISocket wmiSocket_;
+	private transient HashSet<String> disjointRelations_;
+
 
 	@Override
 	public Collection<DAGEdge> execute(Object... arg0)
@@ -57,6 +60,8 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		queryModule_ = (QueryModule) dag_.getModule(QueryModule.class);
 		relationCounts_ = new HashMap<String, int[]>();
 		dummyDisjoints_ = new HashMap<String, String>();
+		disjointRelations_=new HashSet<String>();
+		disjointRelations_.add("AtLocation");
 		aliasModule_ = (NodeAliasModule) dag_.getModule(NodeAliasModule.class);
 
 		WMIAccess wmiAcc;
@@ -71,17 +76,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			e.printStackTrace();
 		}
 		System.out.println("start to process concepts");
-		try {
-			// System.out.println();
-			WeightedSet<Integer> w = wmiSocket_.getWeightedArticles("cat");
-			int key = Integer.parseInt(w.getMostLikely().toArray()[0]
-					.toString());
-			System.out.println(w.getWeight(key));
 
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
 		processConcepts();
 		System.out.println("process concepts done");
 		printCounts();
@@ -120,8 +115,6 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 					if (matcher.find()) {
 						String data = matcher.group(1);
 
-						// System.out.println("data: "+data);
-
 						pattern = Pattern.compile("\\/r\\/([^\\,]+?)\\/");
 						matcher = pattern.matcher(data);
 						matcher.find();
@@ -129,97 +122,42 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
 						pattern = Pattern.compile(",\\/c\\/en\\/([^\\,]+?)\\/");
 						matcher = pattern.matcher(data);
-						if (matcher.find() /*
-											 * &&
-											 * relationName.equals("AtLocation")
-											 */) {
+						if (matcher.find()) {
 							// Make first letter uppercase
-							String nodename1 = covertToKMNodeName(matcher
-									.group(1));
+							String nodename1 = matcher.group(1);
+							matcher.find();
+							String nodename2 = matcher.group(1);
+							// covertToKMNodeName(matcher.group(1));
 
-							DAGNode n1 = dag_.findDAGNode(nodename1);
+							// DAGNode n1 = dag_.findDAGNode(nodename1);
 							// System.out.println("Trying to find node:"
 							// + nodename1);
+							// if (n1 == null) {
+							DAGNode n1 = resolveAmbiguity(nodename1);
 							if (n1 == null) {
-								n1 = resolveAmbiguity(nodename1);
-								if (n1 == null) {
-									continue;
-								}
+								continue;
 							}
+							// }
 
-							matcher.find();
-							String nodename2 = matcher.group(1).substring(0, 1)
-									.toUpperCase()
-									+ matcher.group(1).substring(1);
-							nodename2.replaceAll("_", "");
-							DAGNode n2 = dag_.findDAGNode(nodename2);
+							// DAGNode n2 = dag_.findDAGNode(nodename2);
 							// System.out.println("Trying to find node:"
 							// + nodename2);
+							// if (n2 == null) {
+							DAGNode n2 = resolveAmbiguity(nodename2);
 							if (n2 == null) {
-								n2 = resolveAmbiguity(nodename2);
-								if (n2 == null) {
-									continue;
-								}
+								continue;
 							}
+							// }
 							checkorAddRelation(relationName);
-							Collection<Node> minGenls1 = CommonQuery.DIRECTGENLS
-									.runQuery(dag_, n1);
-							if (minGenls1.size() == 0) {
-								minGenls1.addAll(CommonQuery.MINISA.runQuery(
-										dag_, n1));
-							} else {
-								minGenls1.clear();
-								minGenls1.add(n1);
-							}
+							Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
+							Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
 
-							Collection<Node> minGenls2 = CommonQuery.DIRECTGENLS
-									.runQuery(dag_, n2);
-							if (minGenls2.size() == 0) {
-								minGenls2.addAll(CommonQuery.MINISA.runQuery(
-										dag_, n2));
-							} else {
-								minGenls2.clear();
-								minGenls2.add(n2);
-							}
 							try (PrintWriter out = new PrintWriter(
 									new BufferedWriter(new FileWriter(
 											"newDisjoints.txt", true)))) {
-								for (Node c1 : minGenls1) {
-									for (Node c2 : minGenls2) {
-										if (!c1.equals(c2)) {
-											if (queryModule_.prove(
-													CommonConcepts.DISJOINTWITH
-															.getNode(dag_), c1,
-													c2)) {
-												System.out.println(relationName
-														+ ": " + c1.getName()
-														+ " disjoint to "
-														+ c2.getName());
-												relationCounts_
-														.get(relationName)[0]++;
-											} else if (transitiveModule_
-													.execute(true, c1, c2) != null
-													|| transitiveModule_
-															.execute(false, c1,
-																	c2) != null) {
-												relationCounts_
-														.get(relationName)[1]++;
-												System.out.println(relationName
-														+ ": " + c1.getName()
-														+ " conjoint to "
-														+ c2.getName());
-											} else {
-												if(!dummyDisjoints_.get(c1.getName()).equals(c2.getName())&&!dummyDisjoints_.get(c2.getName()).equals(c1.getName()))
-												relationCounts_
-														.get(relationName)[2]++;
-												// Create disjoint
-												out.println(c1.getName()
-														+ " disjointWith "
-														+ c2.getName());
-												dummyDisjoints_.put(c1.getName(), c2.getName());
-												
-											}
-										}
+								for (Node c1 : disjointCandidates1) {
+									for (Node c2 : disjointCandidates2) {
+										updateSchema(relationName, out, c1, c2);
 									}
 								}
 							}
@@ -233,6 +171,58 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			}
 		}
 
+	}
+
+	private void updateSchema(String relationName, PrintWriter out, Node c1,
+			Node c2) {		
+		
+		if (!c1.equals(c2)) {
+			if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
+					c1, c2)) {
+				System.out.println(relationName + ": " + c1.getName()
+						+ " known disjoint to " + c2.getName());
+				relationCounts_.get(relationName)[0]++;
+			} else if (transitiveModule_.execute(true, c1, c2) != null
+					|| transitiveModule_.execute(false, c1, c2) != null) {
+				relationCounts_.get(relationName)[1]++;
+				System.out.println(relationName + ": " + c1.getName()
+						+ " known conjoint to " + c2.getName());
+			} else {
+				relationCounts_.get(relationName)[2]++;
+
+				//Check that this relation is good to use
+				if(!disjointRelations_.contains(relationName)){
+					//TODO: save this pair for future use?
+					return;
+				}
+				
+				// check the pair has not being added
+				if (dummyDisjoints_.containsKey(c1.getName())
+						&& dummyDisjoints_.get(c1.getName()).equals(
+								c2.getName()))
+					return;
+				else if (dummyDisjoints_.containsKey(c2.getName())
+						&& dummyDisjoints_.get(c2.getName()).equals(
+								c1.getName()))
+					return;
+
+				// Create disjoint
+				out.println(c1.getName() + " disjointWith " + c2.getName());
+				dummyDisjoints_.put(c1.getName(), c2.getName());
+			}
+		}
+	}
+
+	private Collection<Node> getDisjointCandidates(DAGNode node) {
+		assert node != null;
+		Collection<Node> r = CommonQuery.DIRECTGENLS.runQuery(dag_, node);
+		if (r.size() == 0) {
+			r.addAll(CommonQuery.MINISA.runQuery(dag_, node));
+		} else {
+			r.clear();
+			r.add(node);
+		}
+		return r;
 	}
 
 	private DAGNode resolveAmbiguity(String nodename) throws IOException {
@@ -262,8 +252,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		} else if (nodes.size() > 1) {
 			System.out.println(nodes);
 			r = getConcentratedConcept(nodename, nodes);
-			System.out.println(nodename + " is most likely to be "
-					+ r.getName());
+			if (r != null) {
+				System.out.println(nodename + " is most likely to be "
+						+ r.getName());
+				return r;
+			}
 		}
 		return null;
 	}
@@ -276,17 +269,46 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			int key = Integer.parseInt(w.getMostLikely().toArray()[0]
 					.toString());
 			if (w.getWeight(key) >= 0.95) {
+				DAGNode r=null;
+				double mark=0;
+				//find the node with greatest relatedness mark
 				for (DAGNode n : nodes) {
-					if (queryModule_.prove(
-							CommonConcepts.COLLECTION.getNode(dag_), n))
-						//return the first node which is a collection
-						System.out
-								.println(nodename + " is " + w.getWeight(key));
-					return n;
+					double t=getRelatednessMark(n,key);
+					if(t>mark){
+						r=n;
+					}
 				}
+				return r;
 			}
 		}
 		return null;
+	}
+
+	private double getRelatednessMark(DAGNode node, int originalkey) throws IOException {
+		Collection<Node> allParents=CommonQuery.DIRECTGENLS.runQuery(dag_, node);
+		allParents.addAll(CommonQuery.DIRECTISA.runQuery(dag_, node));
+		double r=0;
+		ArrayList<Integer> l=new ArrayList<Integer>();
+		for(Node n:allParents){
+			int key=wmiSocket_.getMostLikelyArticle(((DAGNode)n).getProperty("prettyString-Canonical"));
+			if(key!=-1){
+				l.add(key);
+			}
+		}
+		List<Double> relatednessList=wmiSocket_.getRelatednessList(originalkey, toIntArray(l));
+		for(double d:relatednessList){
+			r+=d;
+		}
+		
+		return r;
+	}
+	
+	private Integer[] toIntArray(List<Integer> list)  {
+		Integer[] ret = new Integer[list.size()];
+	    int i = 0;
+	    for (Integer e : list)  
+	        ret[i++] = e.intValue();
+	    return ret;
 	}
 
 	private Node getDeepestIsAParent(DAGNode n1) {
