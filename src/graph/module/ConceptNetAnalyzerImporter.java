@@ -115,6 +115,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		processConcepts();
 		System.out.println("process concepts done");
 		printCounts();
+		dag_.saveState();
 		return true;
 	}
 
@@ -302,6 +303,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		}
 	}
 
+	private Node creator=new StringNode("ConceptNet Analyzer");
 	private void createDisjointEdge(PrintWriter out, Node c1, Node c2,
 			String relationName, String nodename1, String nodename2) {
 		// check the pair has not being added
@@ -311,11 +313,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		else if (dummyDisjoints_.containsKey(c2.getName())
 				&& dummyDisjoints_.get(c2.getName()).equals(c1.getName()))
 			return;
-
+		dag_.findOrCreateEdge(new Node[] {
+				CommonConcepts.DISJOINTWITH.getNode(dag_),
+				c1, c2 },creator, false);
 		// Create disjoint
-		out.println(c1.getName() + " disjointWith " + c2.getName()
-				+ "; Created by " + nodename1 + " " + relationName + " "
-				+ nodename2);
+		out.println(c1.getName() + "," + c2.getName());
 		dummyDisjoints_.put(c1.getName(), c2.getName());
 	}
 
@@ -360,7 +362,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		if (resolvedNames_.containsKey(nodename)) {
 			return resolvedNames_.get(nodename);
 		}
-		Collection<DAGNode> nodes = aliasModule_.findNodes(nodename, false,
+		Collection<DAGNode> nodes = aliasModule_.findNodes(nodename, true,
 				true);
 		DAGNode r;
 		 if (nodes.size() == 1) {
