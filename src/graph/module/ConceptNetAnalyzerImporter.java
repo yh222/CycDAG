@@ -5,6 +5,7 @@ import graph.core.DAGEdge;
 import graph.core.DAGNode;
 import graph.core.DAGObject;
 import graph.core.Node;
+import graph.core.OntologyFunction;
 import graph.core.StringNode;
 import graph.inference.CommonQuery;
 import graph.inference.QueryObject;
@@ -20,6 +21,7 @@ import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -47,8 +49,14 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private transient HashSet<String> blackListRelations_;
 	private transient HashMap<String, DAGNode> resolvedNames_;
 	private transient HashMap<String, ArrayList<Pair<Node, Node>>> unknownBackups_;
-	private transient DAGNode genls_;
-	private transient DAGNode partiallyTangible_;
+
+	DAGNode partiallyTangible;
+	DAGNode genls;
+	DAGNode isa;
+	DAGNode and;
+	
+	private static int BATCHSIZE_ = 200;
+
 
 	@Override
 	public Collection<DAGEdge> execute(Object... arg0)
@@ -69,21 +77,25 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		unknownBackups_ = new HashMap<String, ArrayList<Pair<Node, Node>>>();
 		disjointRelations_ = new HashSet<String>();
 		blackListRelations_ = new HashSet<String>();
-		genls_ = CommonConcepts.GENLS.getNode(dag_);
-		partiallyTangible_ = (DAGNode) dag_.findOrCreateNode(
-				"PartiallyTangible", null, true);
-		blackListRelations_.add("IsA");
-		blackListRelations_.add("RelatedTo");
-		blackListRelations_.add("Synonym");
-		blackListRelations_.add("HasProperty");
-		blackListRelations_.add("InstanceOf");
-		blackListRelations_.add("TranslationOf");
-		blackListRelations_.add("DerivedFrom");
-		blackListRelations_.add("Antonym");
-		blackListRelations_.add("MemberOf");
 
-		disjointRelations_.add("AtLocation");
-		disjointRelations_.add("PartOf");
+		partiallyTangible = (DAGNode) dag_.findOrCreateNode(
+				"PartiallyTangible", null, true);
+		genls = CommonConcepts.GENLS.getNode(dag_);
+		isa = CommonConcepts.ISA.getNode(dag_);
+		and = CommonConcepts.AND.getNode(dag_);
+
+		// blackListRelations_.add("IsA");
+		// blackListRelations_.add("RelatedTo");
+		// blackListRelations_.add("Synonym");
+		// blackListRelations_.add("HasProperty");
+		// blackListRelations_.add("InstanceOf");
+		// blackListRelations_.add("TranslationOf");
+		// blackListRelations_.add("DerivedFrom");
+		// blackListRelations_.add("Antonym");
+		// blackListRelations_.add("MemberOf");
+
+		// disjointRelations_.add("AtLocation");
+		// disjointRelations_.add("PartOf");
 		// disjointRelations_.add("CausesDesire");
 		// disjointRelations_.add("SimilarTo");
 		// disjointRelations_.add("Attribute");
@@ -113,7 +125,10 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		}
 		System.out.println("start to process concepts");
 
-		processConceptNetData();
+		processYagoData();
+		// processNELLData();
+		// processConceptNetData();
+
 		System.out.println("process concepts done");
 		printCounts();
 		dag_.saveState();
@@ -136,10 +151,101 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		for (String e : blackListRelations_) {
 			System.out.println("Black listed relations: " + e);
 		}
+
+		System.out.println("_notFoundCount: " + _notFoundCount);
+		System.out.println("_cannotResolveCount: " + _cannotResolveCount);
+		System.out.println("_resolvedCount: " + _resolvedCount);
+	}
+
+	private void processYagoData() {
+		int linecount=0;
+		
+		File folder = new File("I:/Documents/Java/CycDAG/Yago");
+		if (folder.isDirectory()) {
+			System.out.println("123");
+		}
+		File[] files = folder.listFiles();
+		try (PrintWriter log = new PrintWriter(new BufferedWriter(
+				new FileWriter("importerLog.txt", true)))) {
+			String line;
+			for (File file : files) {
+				try (BufferedReader br = new BufferedReader(
+						new FileReader(file))) {
+					System.out.println("processing:" + file.getName());
+
+					while ((line = br.readLine()) != null) {
+						linecount++;
+						
+						// skip if the line is not start with '<'
+						if (!line.startsWith("<"))
+							continue;
+
+						// replace _ with space and remove brackets
+						line = line.replace("_", " ");
+						line = line.replace(" .", "");
+						line = line.replaceAll("[<>]", "");
+						// Split the line to 3 parts: concept,relation,concept
+						String[] parts = line.split("\\t");
+
+						String relationName = parts[1];
+
+						// The phase in bracket () may help resolution, but
+						// remove them at the moment
+						parts[0] = parts[0].replaceAll(", .*", "").replaceAll(
+								" \\(.*\\)", "");
+						parts[2] = parts[2].replaceAll(", .*", "").replaceAll(
+								" \\(.*\\)", "");
+
+						// System.out.println(parts[0]);
+						// System.out.println(parts[2]);
+
+						String nodename1 = parts[0];
+						String nodename2 = parts[2];
+
+						DAGNode n1 = resolveAmbiguity(nodename1);
+						if (n1 == null) {
+							continue;
+						}
+						DAGNode n2 = resolveAmbiguity(nodename2);
+						if (n2 == null) {
+							continue;
+						}
+						checkorAddRelation(relationName);
+						Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
+						Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
+
+						try (PrintWriter out = new PrintWriter(
+								new BufferedWriter(new FileWriter(
+										"newDisjoints.txt", true)))) {
+							for (Node c1 : disjointCandidates1) {
+								for (Node c2 : disjointCandidates2) {
+									updateSchema(relationName, log, out, c1,
+											c2, nodename1, nodename2);
+
+								}
+							}
+						}
+						//check marks after every 1000 lines
+						if(linecount%1000==0)
+							checkRelationshipMarks();
+						
+					}
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
+				checkRelationshipMarks();
+			}
+		} catch (IOException e1) {
+			e1.printStackTrace();
+		}
+
 	}
 
 	private void processNELLData() {
-		File folder = new File("/NELL");
+		File folder = new File("I:/Documents/Java/CycDAG/NELL");
+		if (folder.isDirectory()) {
+			System.out.println("123");
+		}
 		File[] files = folder.listFiles();
 		try (PrintWriter log = new PrintWriter(new BufferedWriter(
 				new FileWriter("importerLog.txt", true)))) {
@@ -165,10 +271,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							continue;
 						}
 
-						Pattern pattern = Pattern.compile("y(.*)");
+						Pattern pattern = Pattern.compile("-(.*)");
 						Matcher matcher = pattern.matcher(properties[indexmap
 								.get("Action")]);
-						if (!matcher.find()) {
+						// Skip if this action start with '-'
+						if (matcher.find()) {
 							continue;
 						}
 
@@ -183,7 +290,6 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						if (n2 == null) {
 							continue;
 						}
-						// }
 						checkorAddRelation(relationName);
 						Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
 						Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
@@ -210,6 +316,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
 	}
 
+	// Nell's structure is not stable that the indexes of column changes
 	private HashMap<String, Integer> parseNellIndex(String line) {
 		HashMap<String, Integer> map = new HashMap<String, Integer>();
 		String[] indexes = line.split("\\t");
@@ -228,14 +335,9 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		return map;
 	}
 
-	private void processConceptNetData() {
-		// String[] filenames = new String[] { "part_00.csv", "part_01.csv",
-		// "part_02.csv", "part_03.csv", "part_04.csv", "part_05.csv",
-		// "part_06.csv", "part_07.csv", "part_08.csv", "part_09.csv",
-		// "part_10.csv", "part_11.csv", "part_12.csv", "part_13.csv",
-		// "part_14.csv", "part_15.csv", "part_16.csv", "part_17.csv",
-		// "part_18.csv", "part_19.csv" };
-		File folder = new File("/ConceptNet");
+	private void processConceptNetData() throws URISyntaxException {
+		File folder = new File(this.getClass().getResource("/ConceptNet/")
+				.toURI());
 		File[] files = folder.listFiles();
 
 		try (PrintWriter log = new PrintWriter(new BufferedWriter(
@@ -279,7 +381,6 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 								if (n2 == null) {
 									continue;
 								}
-								// }
 								checkorAddRelation(relationName);
 								Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
 								Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
@@ -318,13 +419,15 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 				double disjointcount = r.getValue()[0];
 				double conjointcount = r.getValue()[1];
 
-				if (disjointcount + conjointcount >= 150) {
+				if (disjointcount + conjointcount >= BATCHSIZE_) {
 					if (conjointcount / (disjointcount + conjointcount) <= 0.05) {
-						disjointRelations_.add(r.getKey());
+						//disjointRelations_.add(r.getKey());
 						putUnknownsToDisjoint(r.getKey());
 					} else {
-						blackListRelations_.add(r.getKey());
+						//blackListRelations_.add(r.getKey());
 					}
+					//reset stats
+					r.setValue(new int[] { 0, 0, 0 });
 				}
 			}
 		}
@@ -350,26 +453,26 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			String nodename2) {
 
 		if (!c1.equals(c2)) {
-			if (queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
-					c1, c2)) {
+			if (isAlreadyDisjointed(c1, c2)) {
 				System.out.println(relationName + ": " + c1.getName()
 						+ " known disjoint to " + c2.getName());
 				// log
 				log.println(relationName + ": " + c1.getName()
-						+ " known disjoint to " + c2.getName());
+						+ " known disjoint to " + c2.getName() + ": "
+						+ nodename1 + "," + nodename2);
 				relationCounts_.get(relationName)[0]++;
-			} else if (transitiveModule_.execute(true, c1, c2) != null
-					|| transitiveModule_.execute(false, c1, c2) != null) {
+			} else if (hasConjoint(c1, c2)) {
 				relationCounts_.get(relationName)[1]++;
 				System.out.println(relationName + ": " + c1.getName()
 						+ " known conjoint to " + c2.getName());
 				// log
 				log.println(relationName + ": " + c1.getName()
-						+ " known conjoint to " + c2.getName());
+						+ " known conjoint to " + c2.getName() + ": "
+						+ nodename1 + "," + nodename2);
 			} else {
 				relationCounts_.get(relationName)[2]++;
 				log.println(relationName + ": " + c1.getName() + " unknown to "
-						+ c2.getName());
+						+ c2.getName() + ": " + nodename1 + "," + nodename2);
 
 				// Check that this relation is good to use
 				if (!disjointRelations_.contains(relationName)) {
@@ -384,7 +487,48 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		}
 	}
 
-	private Node creator = new StringNode("ConceptNet Analyzer");
+	private boolean isAlreadyDisjointed(Node targetNode, Node child) {
+		return queryModule_.prove(CommonConcepts.DISJOINTWITH.getNode(dag_),
+				targetNode, child);
+	}
+
+	private boolean hasConjoint(Node nodeA, Node nodeB) {
+		// Check they are not Genls to each other
+		if (transitiveModule_.execute(true, nodeA, nodeB) != null
+				|| transitiveModule_.execute(false, nodeA, nodeB) != null)
+			return true;
+
+		// Check they do not have conjoint point
+		// Node[] args = dag_.parseNodes(
+		// "(and (genls ?X " + nodeA.getIdentifier() + ") (genls ?X "
+		// + nodeB.getIdentifier() + "))", null, false, false);
+		// // query: and (genls ?X n1) (genls ?X n2)
+		// DAGNode node = new DAGNode();
+		// Substitution substitution = new Substitution("?X", node);
+		// boolean satisfies = queryModule_.prove(substitution
+		// .applySubstitution(args));
+
+		// Check they do not have genls conjoint point
+		VariableNode x = VariableNode.DEFAULT;
+		QueryObject qo = new QueryObject(and, new OntologyFunction(genls, x,
+				nodeA), new OntologyFunction(genls, x, nodeB));
+		Collection<Substitution> results = queryModule_.execute(qo);
+		if (results.size() != 0) {
+			return true;
+		}
+		// Check they do not have isa conjoint point
+		x = VariableNode.DEFAULT;
+		qo = new QueryObject(and, new OntologyFunction(isa, x, nodeA),
+				new OntologyFunction(isa, x, nodeB));
+		results = queryModule_.execute(qo);
+		if (results.size() != 0) {
+			return true;
+		}
+
+		return false;
+	}
+
+	// private Node creator = new StringNode("ConceptNetAnalyzer");
 
 	private void createDisjointEdge(PrintWriter out, Node c1, Node c2,
 			String relationName, String nodename1, String nodename2) {
@@ -395,11 +539,12 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		else if (dummyDisjoints_.containsKey(c2.getName())
 				&& dummyDisjoints_.get(c2.getName()).equals(c1.getName()))
 			return;
+		
 		dag_.findOrCreateEdge(
 				new Node[] { CommonConcepts.DISJOINTWITH.getNode(dag_), c1, c2 },
-				creator, false);
+				new StringNode("ConceptNetAnalyzer" + relationName), false);
 		// Create disjoint
-		out.println(c1.getName() + "," + c2.getName());
+		out.println(c1.getName() + "," + c2.getName() + "," + relationName);
 		dummyDisjoints_.put(c1.getName(), c2.getName());
 	}
 
@@ -418,30 +563,18 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		assert r.get(0) != null;
 		ArrayList<Node> retu = new ArrayList<Node>();
 		for (Node n : r) {
-			if (queryModule_.prove(genls_, n, partiallyTangible_)) {
+			if (queryModule_.prove(genls, n, partiallyTangible)) {
 				retu.add(n);
 			}
 		}
 		return retu;
 	}
 
-	private DAGNode resolveAmbiguity(String nodename) throws IOException {
+	private int _notFoundCount = 0;
+	private int _cannotResolveCount = 0;
+	private int _resolvedCount = 0;
 
-		// Collection<DAGNode> filteredNodes = new
-		// ArrayList<>();
-		// Node[] args =
-		// dag_.parseNodes("(prettyString-Canonical ?X \""+
-		// nodename1+"\")", null, false, false);
-		//
-		// for (DAGNode node : nodes) {
-		// Substitution substitution = new
-		// Substitution("?X", node);
-		// boolean satisfies =
-		// queryModule_.prove(substitution.applySubstitution(args));
-		// if (satisfies) {
-		// filteredNodes.add(node);
-		// }
-		// }
+	private DAGNode resolveAmbiguity(String nodename) throws IOException {
 		if (resolvedNames_.containsKey(nodename)) {
 			return resolvedNames_.get(nodename);
 		}
@@ -450,6 +583,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		DAGNode r;
 		if (nodes.size() == 1) {
 			r = (DAGNode) nodes.toArray()[0];
+			_resolvedCount++;
 			return r;
 		} else if (nodes.size() > 1) {
 			// if (nodes.size() >= 1) {
@@ -464,9 +598,14 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 							+ r.getName());
 				}
 				resolvedNames_.put(nodename, r);
+				_resolvedCount++;
 				return r;
 			}
+			_cannotResolveCount++;
+		} else {
+			_notFoundCount++;
 		}
+
 		return null;
 	}
 
@@ -523,12 +662,16 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		return null;
 	}
 
+	// TODO: mention it in report
 	private double getRelatednessMark(DAGNode node, int originalkey)
 			throws IOException {
 		Collection<Node> allParents = CommonQuery.MINGENLS.runQuery(dag_, node);
 		allParents.addAll(CommonQuery.MINISA.runQuery(dag_, node));
 		double r = 0;
 		ArrayList<Integer> l = new ArrayList<Integer>();
+
+		// populate the list with all articles (in form of id) that likely
+		// linked to a parent of the node
 		for (Node n : allParents) {
 			// get prettry string of each parent
 			Node[] args = dag_.parseNodes(
@@ -549,6 +692,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		}
 		List<Double> relatednessList = wmiSocket_.getRelatednessList(
 				originalkey, toIntArray(l));
+
 		for (double d : relatednessList) {
 			// System.out.println(d);
 			if (d > r)

@@ -5,27 +5,25 @@ import graph.core.DAGEdge;
 import graph.core.DAGNode;
 import graph.core.Edge;
 import graph.core.Node;
+import graph.core.OntologyFunction;
 import graph.core.StringNode;
 import graph.inference.CommonQuery;
+import graph.inference.QueryObject;
+import graph.inference.Substitution;
+import graph.inference.VariableNode;
 
-import java.io.BufferedReader;
 import java.io.BufferedWriter;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Random;
-import java.util.Set;
-
-import org.apache.commons.collections4.CollectionUtils;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import util.Pair;
 
@@ -43,19 +41,28 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	private transient RelatedEdgeModule relEdgeModule_;
 	private transient TransitiveIntervalSchemaModule transitiveModule_;
 	private transient QueryModule queryModule_;
+	private transient SemanticSimilarityModule semanticSimilarityModule_;
 
-	private HashSet<Pair<Node, Node>> exploredPairs_ = new HashSet<Pair<Node, Node>>();
-	private HashSet<Node> rejectedEvidences_ = new HashSet<Node>();
-	private HashSet<Node> acceptedEvidences_ = new HashSet<Node>();
+	private ConcurrentHashMap<Pair<Node, Node>, Integer> exploredPairs_;
+
+	private ConcurrentHashMap<Node, Float> recordedAbstractness_;
 
 	// TODO: magic number here, need to be reasoned
-	private static double THEP_ = 0.4;
+	private static float THEP_ = 0.3f;
+
+	private static float ABSTRACTNESSTHESHOLD_ = 0.7f;
 	// The limitation for exploring children of each parent
-	private static int MAXCHILDEXPLORATION_ = 200;
-	private static int MINCHILDEXPLORATION_ = 5;
+	private static int MAXCHILDEXPLORATION_ = 80;
+
+	private static int MINMATURITY_ = 10;
 
 	// count of disjoint edges created
 	private int disjointCreated_ = 0;
+
+	DAGNode partiallyTangible;
+	DAGNode genls;
+	DAGNode isa;
+	DAGNode and;
 
 	/*
 	 * Node: toExplore_ and exploredPairs_ represent different set of pairs,
@@ -76,10 +83,11 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	public Collection<DAGEdge> execute(Object... arg0)
 			throws IllegalArgumentException, ModuleException {
 		// TODO: manually call the bubble up process
-
 		initialisationComplete(dag_.getNodes(), dag_.getEdges(), false);
 		return null;
 	}
+
+	Node creator_ = new StringNode("BubbleUpDisjoint Module");
 
 	@Override
 	public boolean initialisationComplete(Collection<DAGNode> nodes,
@@ -87,28 +95,15 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		System.out.print("Starting to bubble up disjoints...");
 		initializeModules();
 
-		Node creator = new StringNode("BubbleUpDisjoint Module");
-		Map<Integer, List<Pair<Node, Node>>> pairsToExplore = new HashMap<Integer, List<Pair<Node, Node>>>();
+		// Get all disjoint edges
+		ArrayList<Edge> disjointEdges = new ArrayList<Edge>(
+				relEdgeModule_.execute(
+						CommonConcepts.DISJOINTWITH.getNode(dag_), 1));
 
-//		// Get all disjoint edges
-//		Collection<Edge> disjointEdges = getAllDisjointEdges();
-//
-//		// Sort edges according to the maximum distance to THING node
-//		// Result of sorting will stored at pairsToExplore
-//		sortPairsAndFilterEdges(disjointEdges, pairsToExplore);
-//		explorePairsAndBubbleUpDisjoints(creator, pairsToExplore);
-		try {
-			readfileAndModify();
-		} catch (FileNotFoundException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
-		}
-		
-		System.out.print("Bubble up disjoints done...");
+		bubbleUpDisjoints(disjointEdges);
 
+		System.out.print("Bubble up disjoints done..." + disjointCreated_
+				+ " disjoint edges created.");
 		return true;
 
 	}
@@ -119,266 +114,394 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		transitiveModule_ = (TransitiveIntervalSchemaModule) dag_
 				.getModule(TransitiveIntervalSchemaModule.class);
 		queryModule_ = (QueryModule) dag_.getModule(QueryModule.class);
+		semanticSimilarityModule_ = (SemanticSimilarityModule) dag_
+				.getModule(SemanticSimilarityModule.class);
 
-		// TODO: Check depth module and TransitiveIntervalSchema module have
-		// done the work
-	}
+		exploredPairs_ = new ConcurrentHashMap<Pair<Node, Node>, Integer>();
+		recordedAbstractness_ = new ConcurrentHashMap<Node, Float>();
+		// rejectedNodes_ = new ConcurrentHashMap<Node, Float>();
 
-	private void readfileAndModify() throws FileNotFoundException, IOException {
-
-		try (BufferedReader reader = new BufferedReader(new FileReader(
-				"onlyTangible200.arff"))) {
-			PrintWriter out = new PrintWriter(new BufferedWriter(
-					new FileWriter("new.txt", true)));
-
-			String line = "";
-			String cvsSplitBy = ",";
-
-			while ((line = reader.readLine()) != null) {
-
-				// use comma as separator
-				String[] data = line.split(cvsSplitBy);
-				if (dag_.findDAGNode(data[0]) != null) {
-					Node nodeA = dag_.findDAGNode(data[0]);
-					Node nodeB = dag_.findDAGNode(data[1]);
-
-					// Random rn = new Random();
-					// if (Math.random() <= 0.2) {
-					// out.println(line);
-					// }
-
-					double p1=calculateP(nodeA, (List<Node>) getChildren(nodeA), nodeB);
-					int count1 = _disjointcount;
-					double p2=calculateP(nodeB, (List<Node>) getChildren(nodeB), nodeA);
-					int count2 = _disjointcount;
-					out.println(p1+","+p2+","  + count1 + "," + count2);
-
-				}
-
-			}
-
-			out.close();
-			System.out.println("read/write done");
-		}
-
-	}
-
-	private Collection<Edge> getAllDisjointEdges() {
-		return relEdgeModule_.execute(
-				CommonConcepts.DISJOINTWITH.getNode(dag_), 1);
-	}
-
-	/**
-	 * Sort the pairs from disjoint edges according to the distance from source
-	 * side
-	 * 
-	 * For each pair added, the first node will be source and second node will
-	 * be target. (For source node, parent nodes will be explored in attempt to
-	 * establish disjoint with target node)
-	 */
-	private void sortPairsAndFilterEdges(Collection<Edge> disjointEdges,
-			Map<Integer, List<Pair<Node, Node>>> pairsToExplore) {
-		int temp;
-
-		DAGNode partiallyTangible = (DAGNode) dag_.findOrCreateNode(
+		partiallyTangible = (DAGNode) dag_.findOrCreateNode(
 				"PartiallyTangible", null, true);
-		DAGNode genls = CommonConcepts.GENLS.getNode(dag_);
-
-		for (Edge e : disjointEdges) {
-
-			if (!queryModule_.prove(genls, e.getNodes()[1], partiallyTangible)
-					|| !queryModule_.prove(genls, e.getNodes()[2],
-							partiallyTangible))
-				continue;
-
-			// In the case of function, the depth of node become null
-			if (((DAGNode) e.getNodes()[1]).getProperty("depth") != null) {
-				temp = Integer.parseInt(((DAGNode) e.getNodes()[1])
-						.getProperty("depth"));
-				if (pairsToExplore.get(temp) == null) {
-					pairsToExplore.put(temp, new ArrayList<Pair<Node, Node>>());
-				} else {
-					pairsToExplore.get(temp).add(
-							new Pair<Node, Node>(e.getNodes()[1],
-									e.getNodes()[2]));
-				}
-			}
-
-			// Second node, the pair is (Node2->Node1)
-			if (((DAGNode) e.getNodes()[2]).getProperty("depth") != null) {
-				temp = Integer.parseInt(((DAGNode) e.getNodes()[2])
-						.getProperty("depth"));
-				if (pairsToExplore.get(temp) == null) {
-					pairsToExplore.put(temp, new ArrayList<Pair<Node, Node>>());
-				} else {
-					pairsToExplore.get(temp).add(
-							new Pair<Node, Node>(e.getNodes()[2],
-									e.getNodes()[1]));
-				}
-			}
-		}
-		System.out.println("Pairs sorted");
+		genls = CommonConcepts.GENLS.getNode(dag_);
+		isa = CommonConcepts.ISA.getNode(dag_);
+		and = CommonConcepts.AND.getNode(dag_);
 	}
 
 	/**
 	 * explorePairsAndBubbleUpDisjoints
 	 */
-	private void explorePairsAndBubbleUpDisjoints(Node creator,
-			Map<Integer, List<Pair<Node, Node>>> pairsToExplore) {
-		// Retrieve and sort indexes of lists organized by depth
-		List<Integer> keyset = new ArrayList<Integer>(pairsToExplore.keySet());
-		Collections.sort(keyset);
+	private void bubbleUpDisjoints(ArrayList<Edge> disjointEdges) {
 
-		// Loop backwards, from the greatest index
-		// int count = 0;
-		// int tenPercent = (pairsToExplore.size()) / 10;
-		for (int i = keyset.size() - 1; i > 0; i--) {
-			// null proof
-			if (pairsToExplore.get(keyset.get(i)) == null) {
-				continue;
-			}
-			for (int j = 0; j < pairsToExplore.get(keyset.get(i)).size(); j++) {
-				Pair<Node, Node> pair = pairsToExplore.get(keyset.get(i))
-						.get(j);
-				// Find all Min parent nodes for source node
-				Collection<Node> minGenls = CommonQuery.MINGENLS.runQuery(dag_,
-						pair.objA_);
-				// Try to establish disjoint edge from (each parent of A) to (B)
-				for (Node n : minGenls) {
-					List<Node> children = checkConstraintAndGetChildren(n,
-							pair.objB_);
-					if (children != null) {
-						double p = calculateP(n, children, pair.objB_);
-						saveAndPrintOutput(creator, n, pair.objB_, children, p);
-					}
-				}
-				// count++;
-				// if (count % tenPercent == 0) {
-				// //Print progress info
-				// System.out.println((count / tenPercent * 10) + "% done");
-				// System.out.println(pairsToExplore.get(i).size() - j
-				// + " pairs left, index= " + keyset.get(i));
-				// }
-			}
-		}
-		System.out.println("Bubble up disjoints done");
-	}
-
-	/*
-	 * Check constraints, avoid duplicated operations and return a list of child
-	 * nodes, of collectionParent.
-	 */
-	private List<Node> checkConstraintAndGetChildren(Node collectionParent,
-			Node targetNode) {
-		// If this is a sibling disjoint edge(parent of A genls B), ignore it.
-		if (collectionParent.equals(targetNode))
-			return null;
-
-		// If the pair of nodes has been explored before, skip
-		if (exploredPairs_.contains(new Pair<Node, Node>(targetNode,
-				collectionParent)))
-			return null;
-		exploredPairs_.add(new Pair<Node, Node>(targetNode, collectionParent));
-		// if (rejectedEvidences_.contains(collectionParent))
-		// return null;
-		// If the collectionParent is already disjoint with targetNode, skip it.
-		if (isAlreadyDisjointed(collectionParent, targetNode))
-			return null;
-		// Get all highest child nodes of collectionParent
-		List<Node> children = new ArrayList<Node>(getChildren(collectionParent));
-		// Set upper bound of children size that to be explored
-
-		if (children.size() <= MINCHILDEXPLORATION_) {
-			// Don't decide if children size is too small
-			return null;
-		}
-		return children;
-	}
-
-	// Save the disjoint(if found one) and print other stats
-	private void saveAndPrintOutput(Node creator, Node collectionParent,
-			Node targetNode, List<Node> children, double p) {
-
+		// Create out put .arff header
 		try (PrintWriter out = new PrintWriter(new BufferedWriter(
-				new FileWriter("out.txt", true)))) {
-			if (p == -3) {
-				// out.println("conjoint found bewteen " + targetNode.getName()
-				// + " and " + collectionParent.getName());
-			} else if (p > THEP_ && _disjointcount > 4) {
-				double reverseP = calculateP(collectionParent, children,
-						targetNode);
-				if (reverseP > THEP_ && _disjointcount > 4) {
+				new FileWriter("bubblingUpOutStat.csv", true)))) {
+			out.println("@relation Nodes");
+			out.println("@attribute nodeA string");
+			out.println("@attribute nodeB string");
+			out.println("@attribute 'simJAccard' numeric");
+			out.println("@attribute 'abstractnessA' numeric");
+			out.println("@attribute 'abstractnessB' numeric");
+			out.println("@attribute 'maturityA' numeric");
+			out.println("@attribute 'maturityB' numeric");
+			out.println("@attribute 'pAB' numeric");
+			out.println("@attribute 'pBA' numeric");
+			out.println("@attribute 'disjointCountA' numeric");
+			out.println("@attribute 'disjointCountB' numeric");
+			out.println("@attribute 'prediction' numeric");
+			out.println("@attribute 'classification' numeric");
 
-					boolean tempdisjointed;
-
-					// out.println(collectionParent.getName() + " "
-					// + targetNode.getName() + ", p=" + p + ", Sample size="
-					// + children.size());
-					// out.println("---Content of collection:");
-					// for (Node c : children) {
-					// tempdisjointed = (queryModule_.prove(
-					// CommonConcepts.DISJOINTWITH.getNode(dag_),
-					// targetNode, c)) ? true : false;
-					// out.println("--" + c.getName() + " is disjointed to: "
-					// + targetNode.getName() + ": " + tempdisjointed);
-					// }
-
-					// If they are likely to be disjointed, create a new
-					// disjoint
-					// edge
-					// Write record to output file as well
-					dag_.findOrCreateEdge(new Node[] {
-							CommonConcepts.DISJOINTWITH.getNode(dag_),
-							collectionParent, targetNode }, creator, false);
-					disjointCreated_++;
-					out.println(collectionParent.getName() + ","
-							+ targetNode.getName());
-				}
-			} else if (p <= THEP_) {
-				// out.println("p is too low: " + p);
-			}
+			out.println("@data");
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
+
+		for (int i = 0; i < disjointEdges.size(); i++) {
+			Edge edge = disjointEdges.get(i);
+
+			if (!queryModule_.prove(genls, edge.getNodes()[1],
+					partiallyTangible)
+					|| !queryModule_.prove(genls, edge.getNodes()[2],
+							partiallyTangible))
+				continue;
+
+			// Enter root node as accepted or not accepted
+			isTooAbstract(edge.getNodes()[1]);
+			isTooAbstract(edge.getNodes()[2]);
+
+			TreeNode leftCandidates = createTree(new TreeNode(
+					edge.getNodes()[1], isMatureNode(edge.getNodes()[1])));
+			TreeNode rightCandidates = createTree(new TreeNode(
+					edge.getNodes()[2], isMatureNode(edge.getNodes()[2])));
+
+			while (true) {
+				ExecutorService executor = Executors.newFixedThreadPool(4);
+				int queuesize = 0;
+				// pick a right node
+				TreeNode right = rightCandidates.getAnUnexploredTreeNode();
+				if (right == null)
+					break;
+				while (true) {
+					// pick a left node
+					TreeNode left = leftCandidates.getAnUnexploredTreeNode();
+					if (left == null)// end of this batch, try get next right
+						break;
+
+					// If the pair of nodes has been explored before,skip
+					// Otherwise add it to explored pairs
+					if (right.mNode.hashCode() > left.mNode.hashCode()) {
+						if (exploredPairs_.containsKey(new Pair<Node, Node>(
+								right.mNode, left.mNode)))
+							continue;
+						else
+							exploredPairs_.put(new Pair<Node, Node>(
+									right.mNode, left.mNode), 1);
+					} else if (exploredPairs_.containsKey(new Pair<Node, Node>(
+							left.mNode, right.mNode)))
+						continue;
+					else
+						exploredPairs_.put(new Pair<Node, Node>(left.mNode,
+								right.mNode), 1);
+
+					if (isAlreadyDisjointed(right.mNode, left.mNode))
+						continue;
+					else if (hasConjoint(right.mNode, left.mNode))
+						left.cutTree();
+					else {
+						System.out.println("Exploring: "
+								+ right.mNode.getName() + ","
+								+ left.mNode.getName());
+						// tryCreateDisjointEdge(right.mNode, left.mNode);
+						Runnable worker = new CreateDisjointThread(right.mNode,
+								left.mNode);
+						executor.execute(worker);
+						queuesize++;
+					}
+				}
+				System.out.println(queuesize + " items queued");
+				executor.shutdown();
+				// 3 minutes for each pair at most
+				long length = 180000 * queuesize;
+				long timeout = System.currentTimeMillis() + length;
+				// Wait threads to execute until timeout
+				while (!executor.isTerminated()) {
+					if (System.currentTimeMillis() >= timeout) {
+						System.err.println("time out: " + length / 1e3
+								+ " seconds.");
+						break;
+					}
+				}
+				// Set all flag explored to unexplored, for left tree
+				leftCandidates.resetFlags();
+			}
+
+		}
+
+		System.out.println("Bubble up disjoints done");
+	}
+
+	// Create a tree of nodes that only contains non-abstract nodes, premature
+	// nodes will be flagged
+	private TreeNode createTree(TreeNode treeNode) {
+		List<Node> parents = new ArrayList<Node>(CommonQuery.MINGENLS.runQuery(
+				dag_, treeNode.mNode));
+		for (int i = 0; i < parents.size(); i++) {
+			Node node = parents.get(i);
+			// Skip if the node is too abstract or is not tangible
+			if (isTooAbstract(node)) {
+				continue;
+			} else if (!isTangible(node)) {
+				continue;
+			}
+
+			TreeNode child = new TreeNode(node, treeNode, isMatureNode(node));
+			treeNode.mChildren.add(child);
+			createTree(child);
+		}
+		return treeNode;
+	}
+
+	private boolean isTangible(Node node) {
+		return queryModule_.prove(genls, node, partiallyTangible);
+	}
+
+	// Check if a node has more children than MINMATURITY_
+	private boolean isMatureNode(Node node) {
+		return getMaxChildren(node).size() > MINMATURITY_;
+	}
+
+	private void tryCreateDisjointEdge(Node right, Node left) {
+
+		try (PrintWriter out = new PrintWriter(new BufferedWriter(
+				new FileWriter("bubblingUpOutStat.csv", true)))) {
+			assert (right != null);
+			assert (left != null);
+
+			Pair<Float, Integer> pairA = calculateP(right,
+					getAllChildren(right), left);
+			Pair<Float, Integer> pairB = calculateP(left, getAllChildren(left),
+					right);
+
+			float pAB = pairA.objA_;
+			int countAB = pairA.objB_;
+			float pBA = pairB.objA_;
+			int countBA = pairB.objB_;
+			float sim = getSimilarity(right, left);
+
+			// Debug to see why it sometime get nullpoint
+			if (recordedAbstractness_.get(left) == null
+					|| recordedAbstractness_.get(right) == null) {
+				if (recordedAbstractness_.get(left) == null)
+					System.out.println(left.getName()
+							+ " is not entered as accepted");
+				if (recordedAbstractness_.get(right) == null)
+					System.out.println(right.getName()
+							+ " is not entered as accepted");
+				return;
+			}
+			float abstRight = recordedAbstractness_.get(right);
+			float abstLeft = recordedAbstractness_.get(left);
+
+			int maturityA = getAllChildren(right).size();
+			int maturityB = getAllChildren(left).size();
+
+			out.print(right.getName() + ",");
+			out.print(left.getName() + ",");
+			out.print(sim + ",");
+			out.print(abstRight + ",");
+			out.print(abstLeft + ",");
+			out.print(maturityA + ",");
+			out.print(maturityB + ",");
+			out.print(pAB + ",");
+			out.print(pBA + ",");
+			out.print(countAB + ",");
+			out.print(countBA + ",");
+
+			if (pAB > THEP_ || pBA > THEP_) {
+				dag_.findOrCreateEdge(
+						new Node[] { CommonConcepts.DISJOINTWITH.getNode(dag_),
+								right, left }, creator_, false);
+				disjointCreated_++;
+				out.print(1 + ",");
+			} else {
+				out.print(0 + ",");
+			}
+
+			out.print("\n");
+
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+
+	private class CreateDisjointThread implements Runnable {
+		Node mRight;
+		Node mLeft;
+
+		public CreateDisjointThread(Node right, Node left) {
+			mRight = right;
+			mLeft = left;
+		}
+
+		@Override
+		public void run() {
+
+			assert (mRight != null);
+			assert (mLeft != null);
+			// Debug to see why it sometime get nullpoint
+			if (recordedAbstractness_.get(mLeft) == null
+					|| recordedAbstractness_.get(mRight) == null) {
+				if (recordedAbstractness_.get(mLeft) == null)
+					System.out.println(mLeft.getName()
+							+ " is not entered as accepted");
+				if (recordedAbstractness_.get(mRight) == null)
+					System.out.println(mRight.getName()
+							+ " is not entered as accepted");
+				return;
+			}
+
+			Pair<Float, Integer> pairA = calculateP(mRight,
+					getAllChildren(mRight), mLeft);
+			Pair<Float, Integer> pairB = calculateP(mLeft,
+					getAllChildren(mLeft), mRight);
+
+			float pAB = pairA.objA_;
+			int countAB = pairA.objB_;
+			float pBA = pairB.objA_;
+			int countBA = pairB.objB_;
+			float sim = getSimilarity(mRight, mLeft);
+
+			float abstRight = recordedAbstractness_.get(mRight);
+			float abstLeft = recordedAbstractness_.get(mLeft);
+
+			int maturityA = getMaxChildren(mRight).size();
+			int maturityB = getMaxChildren(mLeft).size();
+
+			printToFile(pAB, countAB, pBA, countBA, sim, abstRight, abstLeft,
+					maturityA, maturityB);
+		}
+
+		private synchronized void printToFile(float pAB, int countAB,
+				float pBA, int countBA, float sim, float abstRight,
+				float abstLeft, int maturityA, int maturityB) {
+			try (PrintWriter out = new PrintWriter(new BufferedWriter(
+					new FileWriter("bubblingUpOutStat.csv", true)))) {
+				out.print(mRight.getName() + ",");
+				out.print(mLeft.getName() + ",");
+				out.print(sim + ",");
+				out.print(abstRight + ",");
+				out.print(abstLeft + ",");
+				out.print(maturityA + ",");
+				out.print(maturityB + ",");
+				out.print(pAB + ",");
+				out.print(pBA + ",");
+				out.print(countAB + ",");
+				out.print(countBA + ",");
+
+				if (pAB > THEP_ || pBA > THEP_) {
+					dag_.findOrCreateEdge(new Node[] {
+							CommonConcepts.DISJOINTWITH.getNode(dag_), mRight,
+							mLeft }, creator_, false);
+					disjointCreated_++;
+					out.print(1 + ",");
+				} else {
+					out.print(0 + ",");
+				}
+
+				out.print("\n");
+
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+
+	public static class TreeNode {
+		private Node mNode;
+		private boolean mExplored;
+		private boolean mIsMature;
+		private TreeNode mParent;
+		private List<TreeNode> mChildren;
+
+		public TreeNode(Node nodein, boolean ismature) {
+			mNode = nodein;
+			mExplored = false;
+			mIsMature = ismature;
+			mChildren = new ArrayList<TreeNode>();
+		}
+
+		public TreeNode(Node nodein, TreeNode parent, boolean ismature) {
+			mNode = nodein;
+			mExplored = false;
+			mParent = parent;
+			mIsMature = ismature;
+			mChildren = new ArrayList<TreeNode>();
+		}
+
+		// Flag all children as explored
+		protected void cutTree() {
+			mExplored = true;
+			for (int i = 0; i < mChildren.size(); i++) {
+				mChildren.get(i).cutTree();
+			}
+		}
+
+		protected void resetFlags() {
+			mExplored = false;
+			for (int i = 0; i < mChildren.size(); i++) {
+				mChildren.get(i).resetFlags();
+			}
+		}
+
+		// Get a node that is mature and not explored
+		protected TreeNode getAnUnexploredTreeNode() {
+			if (!mExplored && mIsMature) {
+				mExplored = true;
+				return this;
+			} else {
+				for (int i = 0; i < mChildren.size(); i++) {
+					TreeNode c = mChildren.get(i).getAnUnexploredTreeNode();
+					if (c != null)
+						return c;
+				}
+				return null;
+			}
+		}
+
 	}
 
 	/*
 	 * Return count of disjointed child. Return -3 if conjoint found. Return -2
 	 * if the collection has high discretion. Return -1 if p's too low
 	 */
-	private int _disjointcount;
 
-	private double calculateP(Node collectionParent, List<Node> children,
-			Node targetNode) {
-		_disjointcount = 0;
+	private Pair<Float, Integer> calculateP(Node collectionParent,
+			List<Node> children, Node targetNode) {
+		int disjointcount = 0;
 
 		boolean isLargeCollection = children.size() > MAXCHILDEXPLORATION_;
 		int roundedchildrensize = isLargeCollection ? MAXCHILDEXPLORATION_
 				: children.size();
 		Random random = new Random();
-		// random sampling for LIMITCHILDEXPLORATION times when children size is
+		// random sampling for MAXCHILDEXPLORATION_ times when children size is
 		// very large
-		for (int i = isLargeCollection ? MAXCHILDEXPLORATION_ - 1 : children
-				.size() - 1; i > 0; i--) {
+		for (int i = roundedchildrensize - 1; i > 0; i--) {
 			Node child;
 			// Random sampling or iterate through the whole
 			if (isLargeCollection) {
-				child = children.get(random.nextInt(roundedchildrensize));
+				child = children.get(random.nextInt(children.size()));
 			} else {
 				child = children.get(i);
 			}
 
 			// if child disjoint with targetNode, count++
 			if (isAlreadyDisjointed(targetNode, child)) {
-				_disjointcount++;
-			} else if (hasConjoint(targetNode, child)) {
-				// else if any conjoint found between the child and
-				// targetNode,skip
-				return -3;
+				disjointcount++;
 			}
 		}
-
-		return (double) _disjointcount / roundedchildrensize;
+		Pair<Float, Integer> pair = new Pair<Float, Integer>(
+				(float) disjointcount / roundedchildrensize, disjointcount);
+		return pair;
 	}
 
 	private boolean isAlreadyDisjointed(Node targetNode, Node child) {
@@ -386,15 +509,132 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				targetNode, child);
 	}
 
-	private boolean hasConjoint(Node targetNode, Node child) {
-		return transitiveModule_.execute(true, targetNode, child) != null
-				|| transitiveModule_.execute(false, targetNode, child) != null;
+	private boolean hasConjoint(Node nodeA, Node nodeB) {
+		// Check they are not Genls to each other
+		if (transitiveModule_.execute(true, nodeA, nodeB) != null
+				|| transitiveModule_.execute(false, nodeA, nodeB) != null)
+			return true;
+
+		// Check they do not have conjoint point
+		// Node[] args = dag_.parseNodes(
+		// "(and (genls ?X " + nodeA.getIdentifier() + ") (genls ?X "
+		// + nodeB.getIdentifier() + "))", null, false, false);
+		// // query: and (genls ?X n1) (genls ?X n2)
+		// DAGNode node = new DAGNode();
+		// Substitution substitution = new Substitution("?X", node);
+		// boolean satisfies = queryModule_.prove(substitution
+		// .applySubstitution(args));
+
+		// Check they do not have genls conjoint point
+		VariableNode x = VariableNode.DEFAULT;
+		QueryObject qo = new QueryObject(and, new OntologyFunction(genls, x,
+				nodeA), new OntologyFunction(genls, x, nodeB));
+		Collection<Substitution> results = queryModule_.execute(qo);
+		if (results.size() != 0) {
+			return true;
+		}
+		// Check they do not have isa conjoint point
+		x = VariableNode.DEFAULT;
+		qo = new QueryObject(and, new OntologyFunction(isa, x, nodeA),
+				new OntologyFunction(isa, x, nodeB));
+		results = queryModule_.execute(qo);
+		if (results.size() != 0) {
+			return true;
+		}
+
+		return false;
 	}
 
-	private Collection<Node> getChildren(Node inputNode) {
-		Collection<Node> children = new ArrayList<Node>(
+	private ArrayList<Node> getAllChildren(Node inputNode) {
+		ArrayList<Node> children = new ArrayList<Node>(
+				CommonQuery.SPECS.runQuery(dag_, inputNode));
+		return children;
+	}
+
+	private ArrayList<Node> getMaxChildren(Node inputNode) {
+		ArrayList<Node> children = new ArrayList<Node>(
 				CommonQuery.MAXSPECS.runQuery(dag_, inputNode));
 		return children;
+	}
+
+	private boolean isTooAbstract(Node inputNode) {
+		/*
+		 * if (rejectedNodes_.containsKey(inputNode)) { return true; } else
+		 */
+		if (recordedAbstractness_.containsKey(inputNode)) {
+			float abst = recordedAbstractness_.get(inputNode);
+			if (abst >= 0 && abst <= ABSTRACTNESSTHESHOLD_) {
+				return true;
+			} else {
+				return false;
+			}
+		}
+		
+		try (PrintWriter out = new PrintWriter(new BufferedWriter(
+				new FileWriter("abslog.txt", true)))) {
+
+			List<Node> children = new ArrayList<Node>(getAllChildren(inputNode));
+			List<Float> similarities = new ArrayList<Float>();
+
+			if (children.size() == 0) {
+				recordedAbstractness_.put(inputNode, 0.9f);
+				return false;
+			}
+
+			boolean isLargeCollection = children.size() > MAXCHILDEXPLORATION_;
+			Random random = new Random();
+			float meanSim = 0;
+
+			for (int i = isLargeCollection ? MAXCHILDEXPLORATION_ - 1
+					: children.size() - 1; i > 0; i--) {
+				Node child;
+				if (isLargeCollection) {
+					child = children.get(random.nextInt(children.size()));
+				} else {
+					child = children.get(i);
+				}
+				for (int j = i - 1; j > 0; j--) {
+					Node anotherchild;
+					if (isLargeCollection) {
+						anotherchild = children.get(random.nextInt(children
+								.size()));
+					} else {
+						anotherchild = children.get(j);
+					}
+					if (child != anotherchild) {
+						float sim = getSimilarity(child, anotherchild);
+						meanSim += sim;
+						similarities.add(sim);
+					}
+				}
+			}
+			// Change: only average the lower 20% entries
+			meanSim = 0;
+			Collections.sort(similarities);
+			for (int i = 0; i < similarities.size() / 5; i++) {
+				meanSim += similarities.get(i);
+			}
+			meanSim /= (similarities.size() / 5);
+			recordedAbstractness_.put(inputNode, meanSim);
+
+			// if (meanSim >= 0)
+			out.println("abstractness of " + inputNode.getName() + " is "
+					+ meanSim);
+
+			if (meanSim >= 0 && meanSim < ABSTRACTNESSTHESHOLD_) {
+				return true;
+			} else {
+				return false;
+			}
+
+		} catch (IOException e) {
+			e.printStackTrace();
+			return true;
+		}
+	}
+
+	private Float getSimilarity(Node nodeA, Node nodeB) {
+		return semanticSimilarityModule_.taxonomicSimilarity(nodeA, nodeB);
 	}
 
 }

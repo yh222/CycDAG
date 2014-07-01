@@ -30,83 +30,6 @@ public class OntologyEdgeModule extends RelatedEdgeModule {
 	private static final String FUNC_SPLIT = "F";
 	private static final long serialVersionUID = -6571482554762313718L;
 
-	private List<EdgeCol> locateEdgeCollections(String functionPrefix,
-			boolean createNew, Object... args) {
-		List<EdgeCol> edgeCols = new ArrayList<>();
-		for (int i = 0; i < args.length; i++) {
-			Node n = (Node) args[i];
-			boolean additive = true;
-			boolean allBut = (functionPrefix != null && functionPrefix
-					.startsWith("!"));
-
-			// Get index of node
-			String index = null;
-			if (i < args.length - 1 && !(args[i + 1] instanceof Node)) {
-				i++;
-				index = args[i].toString();
-				if (index.startsWith("-")) {
-					additive = false;
-					index = index.substring(1);
-				} else if (index.startsWith("!")) {
-					allBut = true;
-					index = index.substring(1);
-				}
-			}
-
-			// Only function as index
-			if (index != null && index.equals(FUNC_SPLIT)) {
-				edgeCols.add(new EdgeCol(true, getFunctionEdges(n, additive)));
-				continue;
-			}
-
-			// TODO This is not ideal for functions.
-			String key = (index == null || functionPrefix == null) ? null
-					: functionPrefix + index;
-			if (allBut && key != null && !key.startsWith("!"))
-				key = "!" + key;
-			if (n instanceof Edge) {
-				if (key != null)
-					key = key + FUNC_SPLIT;
-				edgeCols.addAll(locateEdgeCollections(key, createNew,
-						asIndexed(((Edge) n).getNodes())));
-			} else if (n instanceof DAGNode) {
-				Collection<Edge> edgeCol = (allBut) ? getAllButEdges(n, key)
-						: getEdges(n, key, createNew);
-				edgeCols.add(new EdgeCol(additive, edgeCol));
-			}
-		}
-		return edgeCols;
-	}
-
-	/**
-	 * Gets all edges but the one given by the key.
-	 * 
-	 * @param node
-	 *            The edges must include this node.
-	 * @param butEdgeKey
-	 *            The key that is NOT added to the results.
-	 * @return A collection of edges that are indexed by node, but none from the
-	 *         butEdgeKey (though they may be added if included under other
-	 *         keys).
-	 */
-	public Collection<Edge> getAllButEdges(Node node, Object butEdgeKey) {
-		MultiMap<Object, Edge> indexedEdges = relatedEdges_.get(node);
-		if (indexedEdges == null) {
-			return new ConcurrentLinkedQueue<>();
-		}
-
-		Collection<Edge> edges = new HashSet<>();
-		for (Object key : indexedEdges.keySet()) {
-			if (!key.equals(butEdgeKey)) {
-				// Need to check same function level as butEdge
-				if (StringUtils.countMatches((String) key, FUNC_SPLIT) == StringUtils
-						.countMatches((String) butEdgeKey, FUNC_SPLIT))
-					edges.addAll(indexedEdges.get(key));
-			}
-		}
-		return edges;
-	}
-
 	/**
 	 * Gets the function edges (or edges containing the node NOT in functions).
 	 * 
@@ -129,6 +52,60 @@ public class OntologyEdgeModule extends RelatedEdgeModule {
 				funcEdges.addAll(nodeEdges.get(key));
 		}
 		return funcEdges;
+	}
+
+	private List<EdgeCol> locateEdgeCollections(String functionPrefix,
+			boolean createNew, Object... args) {
+		List<EdgeCol> edgeCols = new ArrayList<>();
+		Node predicate = null;
+		for (int i = 0; i < args.length; i++) {
+			Node n = (Node) args[i];
+			boolean additive = true;
+			boolean allBut = (functionPrefix != null && functionPrefix
+					.startsWith("!"));
+
+			// Get index of node
+			String index = null;
+			if (i < args.length - 1 && !(args[i + 1] instanceof Node)) {
+				i++;
+				index = args[i].toString();
+				if (index.startsWith("-")) {
+					additive = false;
+					index = index.substring(1);
+				} else if (index.startsWith("!")) {
+					allBut = true;
+					index = index.substring(1);
+				} else if (index.equals("1"))
+					predicate = n;
+			}
+
+			// Only function as index
+			if (index != null && index.equals(FUNC_SPLIT)) {
+				edgeCols.add(new EdgeCol(true, getFunctionEdges(n, additive)));
+				continue;
+			}
+
+			// TODO This is not ideal for functions.
+			String key = (index == null || functionPrefix == null) ? null
+					: functionPrefix + index;
+			if (allBut && key != null && !key.startsWith("!"))
+				key = "!" + key;
+			if (n instanceof Edge) {
+				if (key != null)
+					key = key + FUNC_SPLIT;
+				edgeCols.addAll(locateEdgeCollections(key, createNew,
+						asIndexed(((Edge) n).getNodes())));
+			} else if (n instanceof DAGNode) {
+				Collection<Edge> edgeCol = (allBut) ? getAllButEdges(n, key)
+						: getEdges(n, key, createNew);
+				edgeCols.add(new EdgeCol(additive, edgeCol));
+			} else if (canSearchHashedModule(predicate, n)) {
+				Collection<Edge> edgeCol = stringHashedModule_.execute(n
+						.getName());
+				edgeCols.add(new EdgeCol(additive, edgeCol));
+			}
+		}
+		return edgeCols;
 	}
 
 	private ArrayList<Object> recurseIndexed(Node[] nodes, String prefix) {
@@ -203,11 +180,40 @@ public class OntologyEdgeModule extends RelatedEdgeModule {
 			return false;
 
 		// Check the node
-		return edgeNodes[index].equals(nonDAG.objA_);
+		return edgeNodes[index].toString().equals(nonDAG.objA_.toString());
 	}
 
 	@Override
 	protected Object parseKeyArg(Object arg) {
 		return arg.toString();
+	}
+
+	/**
+	 * Gets all edges but the one given by the key.
+	 * 
+	 * @param node
+	 *            The edges must include this node.
+	 * @param butEdgeKey
+	 *            The key that is NOT added to the results.
+	 * @return A collection of edges that are indexed by node, but none from the
+	 *         butEdgeKey (though they may be added if included under other
+	 *         keys).
+	 */
+	public Collection<Edge> getAllButEdges(Node node, Object butEdgeKey) {
+		MultiMap<Object, Edge> indexedEdges = relatedEdges_.get(node);
+		if (indexedEdges == null) {
+			return new ConcurrentLinkedQueue<>();
+		}
+
+		Collection<Edge> edges = new HashSet<>();
+		for (Object key : indexedEdges.keySet()) {
+			if (!key.equals(butEdgeKey)) {
+				// Need to check same function level as butEdge
+				if (StringUtils.countMatches((String) key, FUNC_SPLIT) == StringUtils
+						.countMatches((String) butEdgeKey, FUNC_SPLIT))
+					edges.addAll(indexedEdges.get(key));
+			}
+		}
+		return edges;
 	}
 }

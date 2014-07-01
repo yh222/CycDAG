@@ -10,11 +10,14 @@
  ******************************************************************************/
 package graph.module;
 
+import graph.core.DAGNode;
 import graph.core.Node;
 import graph.inference.CommonQuery;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.List;
 
 import org.apache.commons.collections4.CollectionUtils;
 
@@ -63,6 +66,42 @@ public class SemanticSimilarityModule extends DAGModule<Float> {
 				CommonQuery.ALLISA.runQuery(dag_, node));
 		parents.addAll(CommonQuery.ALLGENLS.runQuery(dag_, node));
 		return parents;
+	}
+
+	public float taxonomicSimilarity(Node nodeA, Node nodeB) {
+		if(((DAGNode) nodeA).getProperty("depth")==null||((DAGNode) nodeB).getProperty("depth")==null)
+			return 1;
+		
+		int depthA=Integer.parseInt(((DAGNode) nodeA).getProperty("depth"));
+		int depthB=Integer.parseInt(((DAGNode) nodeB).getProperty("depth"));	
+		
+		Collection<Node> parents1 = getParents(nodeA);
+		Collection<Node> parents2 = getParents(nodeB);
+		List<Node> intersect = new ArrayList<Node>(
+				CollectionUtils.intersection(parents1, parents2));
+
+		Node lowest=null;
+		int depth = 0;
+		//Find lowest intersection
+		for (int i = 0; i < intersect.size(); i++) {
+			DAGNode temp = (DAGNode) intersect.get(i);
+			if (temp.getProperty("depth") != null) {
+				int d = Integer.parseInt(temp.getProperty("depth"));
+				if (d > depth) {
+					depth = d;
+					lowest = temp;
+				}
+			}
+		}
+
+		if(((depthA+depthB)-2f*depth)<0){
+			System.out.println("a is "+nodeA.getName()+" nodeB is "+ nodeB.getName()+ " nodeP is "+lowest);
+			System.out.println("a is "+depthA+" nodeB is "+ depthB+ " nodeP is "+depth);
+		}
+		
+		//return (2f*depth)/(depthA+depthB);
+		return depth*1f/((depthA+depthB)-2f*depth);
+
 	}
 
 }

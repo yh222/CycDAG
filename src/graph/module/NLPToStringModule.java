@@ -39,7 +39,7 @@ public class NLPToStringModule extends DAGModule<String> {
 	private String conjunctedEdgeToString(QueryObject queryObject,
 			boolean isQuery, boolean markup) {
 		Node[] conjuncted = queryObject.getNodes();
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		for (int i = 1; i < conjuncted.length; i++) {
 			if (i > 1) {
 				if (isQuery)
@@ -100,7 +100,7 @@ public class NLPToStringModule extends DAGModule<String> {
 						VariableNode.DEFAULT));
 		if (predicateStrings.isEmpty()) {
 			// No NLP String, revert to default
-			StringBuffer buffer = new StringBuffer();
+			StringBuilder buffer = new StringBuilder();
 			if (isQuery && queryObject.isProof())
 				buffer.append("does ");
 			buffer.append(replacements[1]);
@@ -192,10 +192,30 @@ public class NLPToStringModule extends DAGModule<String> {
 		return null;
 	}
 
+	@Override
+	public boolean addNode(DAGNode node) {
+		// Add its alias to the NodeAlias map
+		NodeAliasModule nam = (NodeAliasModule) dag_
+				.getModule(NodeAliasModule.class);
+		if (nam != null) {
+			String nodeName = nodeToString(node, false);
+			if (!nodeName.isEmpty())
+				nam.addAlias(node, nodeName);
+			if (!node.getName().startsWith("(")) {
+				String basicName = conceptToPlainText(node.getName());
+				if (!basicName.equals(nodeName)
+						&& !basicName.equals(node.getName())
+						&& !basicName.isEmpty())
+					nam.addAlias(node, basicName);
+			}
+		}
+		return super.addNode(node);
+	}
+
 	public String markupToString(String string, boolean markup) {
 		// Find all instances of [[text]] and swap it for dag-to-text, OR append
 		// it with dag-to-text if markup is active.
-		StringBuffer buffer = new StringBuffer();
+		StringBuilder buffer = new StringBuilder();
 		int start = 0;
 		Matcher m = MARKUP_PATTERN.matcher(string);
 		while (m.find()) {
@@ -238,7 +258,7 @@ public class NLPToStringModule extends DAGModule<String> {
 		// Convert name into plain text
 		if (node instanceof OntologyFunction) {
 			Node[] args = ((OntologyFunction) node).getNodes();
-			StringBuffer argString = new StringBuffer();
+			StringBuilder argString = new StringBuilder();
 			for (int i = 1; i < args.length; i++) {
 				if (argString.length() != 0)
 					argString.append(" & ");
