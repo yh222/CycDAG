@@ -19,6 +19,7 @@ import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
@@ -43,7 +44,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 	private transient QueryModule queryModule_;
 	private transient SemanticSimilarityModule semanticSimilarityModule_;
 
-	private ConcurrentHashMap<Pair<Node, Node>, Integer> exploredPairs_;
+	private ConcurrentHashMap<Node, Node> exploredPairs_;
 
 	private ConcurrentHashMap<Node, Float> recordedAbstractness_;
 
@@ -117,7 +118,7 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		semanticSimilarityModule_ = (SemanticSimilarityModule) dag_
 				.getModule(SemanticSimilarityModule.class);
 
-		exploredPairs_ = new ConcurrentHashMap<Pair<Node, Node>, Integer>();
+		exploredPairs_ = new ConcurrentHashMap<Node, Node>();
 		recordedAbstractness_ = new ConcurrentHashMap<Node, Float>();
 		// rejectedNodes_ = new ConcurrentHashMap<Node, Float>();
 
@@ -139,135 +140,78 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			out.println("@relation Nodes");
 			out.println("@attribute nodeA string");
 			out.println("@attribute nodeB string");
-			out.println("@attribute 'simJAccard' numeric");
+			out.println("@attribute 'similarity' numeric");
 			out.println("@attribute 'abstractnessA' numeric");
 			out.println("@attribute 'abstractnessB' numeric");
-			out.println("@attribute 'maturityA' numeric");
-			out.println("@attribute 'maturityB' numeric");
+			out.println("@attribute 'MaxChildA' numeric");
+			out.println("@attribute 'MaxChildB' numeric");
+			out.println("@attribute 'AllChildA' numeric");
+			out.println("@attribute 'AllChildB' numeric");
+			out.println("@attribute 'AllParentA' numeric");
+			out.println("@attribute 'AllParentB' numeric");
 			out.println("@attribute 'pAB' numeric");
 			out.println("@attribute 'pBA' numeric");
+			out.println("@attribute 'depthA' numeric");
+			out.println("@attribute 'depthB' numeric");
 			out.println("@attribute 'disjointCountA' numeric");
 			out.println("@attribute 'disjointCountB' numeric");
 			out.println("@attribute 'prediction' numeric");
 			out.println("@attribute 'classification' numeric");
-
 			out.println("@data");
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
 
-		for (int i = 0; i < disjointEdges.size(); i++) {
-			Edge edge = disjointEdges.get(i);
-
-			if (!queryModule_.prove(genls, edge.getNodes()[1],
-					partiallyTangible)
-					|| !queryModule_.prove(genls, edge.getNodes()[2],
-							partiallyTangible))
+		for (int k = 0; k < 500; k++) {
+			Node a = getRandomCollectionHead();
+			Node b = getRandomCollectionHead();
+			if (hasConjoint(a, b) || isAlreadyDisjointed(a, b)) {
+				k--;
 				continue;
-
-			// Enter root node as accepted or not accepted
-			isTooAbstract(edge.getNodes()[1]);
-			isTooAbstract(edge.getNodes()[2]);
-
-			TreeNode leftCandidates = createTree(new TreeNode(
-					edge.getNodes()[1], isMatureNode(edge.getNodes()[1])));
-			TreeNode rightCandidates = createTree(new TreeNode(
-					edge.getNodes()[2], isMatureNode(edge.getNodes()[2])));
-
-			while (true) {
-				ExecutorService executor = Executors.newFixedThreadPool(4);
-				int queuesize = 0;
-				// pick a right node
-				TreeNode right = rightCandidates.getAnUnexploredTreeNode();
-				if (right == null)
-					break;
-				while (true) {
-					// pick a left node
-					TreeNode left = leftCandidates.getAnUnexploredTreeNode();
-					if (left == null)// end of this batch, try get next right
-						break;
-
-					// If the pair of nodes has been explored before,skip
-					// Otherwise add it to explored pairs
-					if (right.mNode.hashCode() > left.mNode.hashCode()) {
-						if (exploredPairs_.containsKey(new Pair<Node, Node>(
-								right.mNode, left.mNode)))
-							continue;
-						else
-							exploredPairs_.put(new Pair<Node, Node>(
-									right.mNode, left.mNode), 1);
-					} else if (exploredPairs_.containsKey(new Pair<Node, Node>(
-							left.mNode, right.mNode)))
-						continue;
-					else
-						exploredPairs_.put(new Pair<Node, Node>(left.mNode,
-								right.mNode), 1);
-
-					if (isAlreadyDisjointed(right.mNode, left.mNode))
-						continue;
-					else if (hasConjoint(right.mNode, left.mNode))
-						left.cutTree();
-					else {
-						System.out.println("Exploring: "
-								+ right.mNode.getName() + ","
-								+ left.mNode.getName());
-						// tryCreateDisjointEdge(right.mNode, left.mNode);
-						Runnable worker = new CreateDisjointThread(right.mNode,
-								left.mNode);
-						executor.execute(worker);
-						queuesize++;
-					}
-				}
-				System.out.println(queuesize + " items queued");
-				executor.shutdown();
-				// 3 minutes for each pair at most
-				long length = 180000 * queuesize;
-				long timeout = System.currentTimeMillis() + length;
-				// Wait threads to execute until timeout
-				while (!executor.isTerminated()) {
-					if (System.currentTimeMillis() >= timeout) {
-						System.err.println("time out: " + length / 1e3
-								+ " seconds.");
-						break;
-					}
-				}
-				// Set all flag explored to unexplored, for left tree
-				leftCandidates.resetFlags();
 			}
-
+			isTooAbstract(a);
+			isTooAbstract(b);
+			used.add(a.getIdentifier());
+			used.add(b.getIdentifier());
+			tryCreateDisjointEdge(a, b);
 		}
 
 		System.out.println("Bubble up disjoints done");
 	}
 
-	// Create a tree of nodes that only contains non-abstract nodes, premature
-	// nodes will be flagged
-	private TreeNode createTree(TreeNode treeNode) {
-		List<Node> parents = new ArrayList<Node>(CommonQuery.MINGENLS.runQuery(
-				dag_, treeNode.mNode));
-		for (int i = 0; i < parents.size(); i++) {
-			Node node = parents.get(i);
-			// Skip if the node is too abstract or is not tangible
-			if (isTooAbstract(node)) {
-				continue;
-			} else if (!isTangible(node)) {
-				continue;
-			}
+	HashSet<String> used=new HashSet<String>();
+	private Node getRandomCollectionHead() {
+		Node n = null;
+		do {
+			n = dag_.getRandomNode();
+		} while (!isWantedNode(n));
+		return n;
+	}
 
-			TreeNode child = new TreeNode(node, treeNode, isMatureNode(node));
-			treeNode.mChildren.add(child);
-			createTree(child);
-		}
-		return treeNode;
+	private boolean isWantedNode(Node n) {
+		if(used.contains(n.getIdentifier()))
+			return false;
+		
+		
+		if (!isTangible(n))
+			return false;
+
+		int maxchild = getMaxChildren(n).size();
+		if (maxchild > 40 || maxchild < 10)
+			return false;
+
+		isTooAbstract(n);
+		float abs = recordedAbstractness_.get(n);
+		if (abs <= 5)
+			return false;
+
+		
+		
+		return true;
 	}
 
 	private boolean isTangible(Node node) {
 		return queryModule_.prove(genls, node, partiallyTangible);
-	}
-
-	// Check if a node has more children than MINMATURITY_
-	private boolean isMatureNode(Node node) {
-		return getMaxChildren(node).size() > MINMATURITY_;
 	}
 
 	private void tryCreateDisjointEdge(Node right, Node left) {
@@ -276,6 +220,9 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				new FileWriter("bubblingUpOutStat.csv", true)))) {
 			assert (right != null);
 			assert (left != null);
+
+			System.out.println("processing pair:" + right.getName() + ", "
+					+ left.getName());
 
 			Pair<Float, Integer> pairA = calculateP(right,
 					getAllChildren(right), left);
@@ -286,41 +233,44 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			int countAB = pairA.objB_;
 			float pBA = pairB.objA_;
 			int countBA = pairB.objB_;
-			float sim = getSimilarity(right, left);
 
-			// Debug to see why it sometime get nullpoint
-			if (recordedAbstractness_.get(left) == null
-					|| recordedAbstractness_.get(right) == null) {
-				if (recordedAbstractness_.get(left) == null)
-					System.out.println(left.getName()
-							+ " is not entered as accepted");
-				if (recordedAbstractness_.get(right) == null)
-					System.out.println(right.getName()
-							+ " is not entered as accepted");
-				return;
-			}
+			float sim = getSimilarity(right, left);
 			float abstRight = recordedAbstractness_.get(right);
 			float abstLeft = recordedAbstractness_.get(left);
 
-			int maturityA = getAllChildren(right).size();
-			int maturityB = getAllChildren(left).size();
+			int MaxChildA = getMaxChildren(right).size();
+			int MaxChildB = getMaxChildren(left).size();
+
+			int allChildA = getAllChildren(right).size();
+			int allChildB = getAllChildren(left).size();
+
+			int allParentA = getAllGenlsParent(right).size();
+			int allParentB = getAllGenlsParent(left).size();
+
+			int depthA = Integer.parseInt(((DAGNode) right)
+					.getProperty("depth"));
+			int depthB = Integer
+					.parseInt(((DAGNode) left).getProperty("depth"));
 
 			out.print(right.getName() + ",");
 			out.print(left.getName() + ",");
 			out.print(sim + ",");
 			out.print(abstRight + ",");
 			out.print(abstLeft + ",");
-			out.print(maturityA + ",");
-			out.print(maturityB + ",");
+			out.print(MaxChildA + ",");
+			out.print(MaxChildB + ",");
+			out.print(allChildA + ",");
+			out.print(allChildB + ",");
+			out.print(allParentA + ",");
+			out.print(allParentB + ",");
 			out.print(pAB + ",");
 			out.print(pBA + ",");
+			out.print(depthA + ",");
+			out.print(depthB + ",");
 			out.print(countAB + ",");
 			out.print(countBA + ",");
 
 			if (pAB > THEP_ || pBA > THEP_) {
-				dag_.findOrCreateEdge(
-						new Node[] { CommonConcepts.DISJOINTWITH.getNode(dag_),
-								right, left }, creator_, false);
 				disjointCreated_++;
 				out.print(1 + ",");
 			} else {
@@ -346,20 +296,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		@Override
 		public void run() {
 
-			assert (mRight != null);
-			assert (mLeft != null);
-			// Debug to see why it sometime get nullpoint
-			if (recordedAbstractness_.get(mLeft) == null
-					|| recordedAbstractness_.get(mRight) == null) {
-				if (recordedAbstractness_.get(mLeft) == null)
-					System.out.println(mLeft.getName()
-							+ " is not entered as accepted");
-				if (recordedAbstractness_.get(mRight) == null)
-					System.out.println(mRight.getName()
-							+ " is not entered as accepted");
-				return;
-			}
-
 			Pair<Float, Integer> pairA = calculateP(mRight,
 					getAllChildren(mRight), mLeft);
 			Pair<Float, Integer> pairB = calculateP(mLeft,
@@ -369,23 +305,61 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 			int countAB = pairA.objB_;
 			float pBA = pairB.objA_;
 			int countBA = pairB.objB_;
-			float sim = getSimilarity(mRight, mLeft);
 
+			float sim = getSimilarity(mRight, mLeft);
 			float abstRight = recordedAbstractness_.get(mRight);
 			float abstLeft = recordedAbstractness_.get(mLeft);
 
-			int maturityA = getMaxChildren(mRight).size();
-			int maturityB = getMaxChildren(mLeft).size();
+			int MaxChildA = getMaxChildren(mRight).size();
+			int MaxChildB = getMaxChildren(mLeft).size();
+
+			int allChildA = getAllChildren(mRight).size();
+			int allChildB = getAllChildren(mLeft).size();
+
+			int allParentA = getAllGenlsParent(mRight).size();
+			int allParentB = getAllGenlsParent(mLeft).size();
+
+			int depthA = Integer.parseInt(((DAGNode) mRight)
+					.getProperty("depth"));
+			int depthB = Integer.parseInt(((DAGNode) mLeft)
+					.getProperty("depth"));
 
 			printToFile(pAB, countAB, pBA, countBA, sim, abstRight, abstLeft,
-					maturityA, maturityB);
+					MaxChildA, MaxChildB, allChildA, allChildB, allParentA,
+					allParentB, depthA, depthB);
 		}
+
+		/*
+		 * out.println("@relation Nodes");
+		 * out.println("@attribute nodeA string");
+		 * out.println("@attribute nodeB string");
+		 * out.println("@attribute 'similarity' numeric");
+		 * out.println("@attribute 'abstractnessA' numeric");
+		 * out.println("@attribute 'abstractnessB' numeric");
+		 * out.println("@attribute 'MaxChildA' numeric");
+		 * out.println("@attribute 'MaxChildB' numeric");
+		 * out.println("@attribute 'AllChildA' numeric");
+		 * out.println("@attribute 'AllChildB' numeric");
+		 * out.println("@attribute 'AllParentA' numeric");
+		 * out.println("@attribute 'AllParentB' numeric");
+		 * out.println("@attribute 'pAB' numeric");
+		 * out.println("@attribute 'pBA' numeric");
+		 * out.println("@attribute 'depthA' numeric");
+		 * out.println("@attribute 'depthB' numeric");
+		 * out.println("@attribute 'disjointCountA' numeric");
+		 * out.println("@attribute 'disjointCountB' numeric");
+		 * out.println("@attribute 'prediction' numeric");
+		 * out.println("@attribute 'classification' numeric");
+		 */
 
 		private synchronized void printToFile(float pAB, int countAB,
 				float pBA, int countBA, float sim, float abstRight,
-				float abstLeft, int maturityA, int maturityB) {
+				float abstLeft, int maturityA, int maturityB, int allChildA,
+				int allChildB, int allParentA, int allParentB, int depthA,
+				int depthB) {
 			try (PrintWriter out = new PrintWriter(new BufferedWriter(
 					new FileWriter("bubblingUpOutStat.csv", true)))) {
+
 				out.print(mRight.getName() + ",");
 				out.print(mLeft.getName() + ",");
 				out.print(sim + ",");
@@ -393,15 +367,18 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				out.print(abstLeft + ",");
 				out.print(maturityA + ",");
 				out.print(maturityB + ",");
+				out.print(allChildA + ",");
+				out.print(allChildB + ",");
+				out.print(allParentA + ",");
+				out.print(allParentB + ",");
 				out.print(pAB + ",");
 				out.print(pBA + ",");
+				out.print(depthA + ",");
+				out.print(depthB + ",");
 				out.print(countAB + ",");
 				out.print(countBA + ",");
 
 				if (pAB > THEP_ || pBA > THEP_) {
-					dag_.findOrCreateEdge(new Node[] {
-							CommonConcepts.DISJOINTWITH.getNode(dag_), mRight,
-							mLeft }, creator_, false);
 					disjointCreated_++;
 					out.print(1 + ",");
 				} else {
@@ -414,60 +391,6 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				e.printStackTrace();
 			}
 		}
-	}
-
-	public static class TreeNode {
-		private Node mNode;
-		private boolean mExplored;
-		private boolean mIsMature;
-		private TreeNode mParent;
-		private List<TreeNode> mChildren;
-
-		public TreeNode(Node nodein, boolean ismature) {
-			mNode = nodein;
-			mExplored = false;
-			mIsMature = ismature;
-			mChildren = new ArrayList<TreeNode>();
-		}
-
-		public TreeNode(Node nodein, TreeNode parent, boolean ismature) {
-			mNode = nodein;
-			mExplored = false;
-			mParent = parent;
-			mIsMature = ismature;
-			mChildren = new ArrayList<TreeNode>();
-		}
-
-		// Flag all children as explored
-		protected void cutTree() {
-			mExplored = true;
-			for (int i = 0; i < mChildren.size(); i++) {
-				mChildren.get(i).cutTree();
-			}
-		}
-
-		protected void resetFlags() {
-			mExplored = false;
-			for (int i = 0; i < mChildren.size(); i++) {
-				mChildren.get(i).resetFlags();
-			}
-		}
-
-		// Get a node that is mature and not explored
-		protected TreeNode getAnUnexploredTreeNode() {
-			if (!mExplored && mIsMature) {
-				mExplored = true;
-				return this;
-			} else {
-				for (int i = 0; i < mChildren.size(); i++) {
-					TreeNode c = mChildren.get(i).getAnUnexploredTreeNode();
-					if (c != null)
-						return c;
-				}
-				return null;
-			}
-		}
-
 	}
 
 	/*
@@ -557,6 +480,18 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 		return children;
 	}
 
+	private ArrayList<Node> getAllGenlsParent(Node inputNode) {
+		ArrayList<Node> children = new ArrayList<Node>(
+				CommonQuery.ALLGENLS.runQuery(dag_, inputNode));
+		return children;
+	}
+
+	private ArrayList<Node> getMinGenlsParent(Node inputNode) {
+		ArrayList<Node> children = new ArrayList<Node>(
+				CommonQuery.MINGENLS.runQuery(dag_, inputNode));
+		return children;
+	}
+
 	private boolean isTooAbstract(Node inputNode) {
 		/*
 		 * if (rejectedNodes_.containsKey(inputNode)) { return true; } else
@@ -569,14 +504,14 @@ public class BubbleUpDisjointModule extends DAGModule<Collection<DAGEdge>> {
 				return false;
 			}
 		}
-		
+
 		try (PrintWriter out = new PrintWriter(new BufferedWriter(
 				new FileWriter("abslog.txt", true)))) {
 
 			List<Node> children = new ArrayList<Node>(getAllChildren(inputNode));
 			List<Float> similarities = new ArrayList<Float>();
 
-			if (children.size() == 0) {
+			if (children.size() <= 5) {
 				recordedAbstractness_.put(inputNode, 0.9f);
 				return false;
 			}

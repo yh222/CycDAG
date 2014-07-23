@@ -21,6 +21,7 @@ import java.util.List;
 
 import org.apache.commons.collections4.CollectionUtils;
 
+
 /**
  * A module for calculating semantic similarity between two concepts.
  * 
@@ -100,7 +101,7 @@ public class SemanticSimilarityModule extends DAGModule<Float> {
 		}
 		
 		//return (2f*depth)/(depthA+depthB);
-		return depth*1f/((depthA+depthB)-2f*depth);
+		return (depth*1f)/((depthA+depthB)-2f*depth);
 
 	}
 

@@ -23,14 +23,20 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.URISyntaxException;
 import java.net.UnknownHostException;
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map.Entry;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import org.apache.commons.collections4.CollectionUtils;
 
 import util.AliasedObject;
 import util.Pair;
@@ -43,20 +49,32 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	private transient QueryModule queryModule_;
 	private transient NodeAliasModule aliasModule_;
 	private transient WMISocket wmiSocket_;
-	private HashMap<String, int[]> relationCounts_;
-	private transient HashMap<String, String> dummyDisjoints_;
-	private transient HashSet<String> disjointRelations_;
-	private transient HashSet<String> blackListRelations_;
-	private transient HashMap<String, DAGNode> resolvedNames_;
-	private transient HashMap<String, ArrayList<Pair<Node, Node>>> unknownBackups_;
+	private transient ConcurrentHashMap<String, int[]> relationReliabilityCount_;
+	private transient ConcurrentHashMap<Pair<String, String>, Boolean> dummyDisjoints_;
 
-	DAGNode partiallyTangible;
-	DAGNode genls;
-	DAGNode isa;
-	DAGNode and;
-	
-	private static int BATCHSIZE_ = 200;
+	private ConcurrentHashMap<String, ArrayList<DAGNode>> resolvedNames_;
 
+	private transient ConcurrentHashMap<String, ConcurrentHashMap<Node, int[]>> interRelastionReliabilityCount_;
+	private transient ConcurrentHashMap<String, ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>>> unknownBackups_;
+
+	// private transient ConcurrentHashMap<String, ConcurrentHashMap<String,
+	// String>> explored_;
+
+	private DAGNode secondordercyc;
+	private DAGNode partiallyTangible;
+	private DAGNode genls;
+	private DAGNode isa;
+	private DAGNode and;
+
+	private transient int _notFoundCount = 0;
+	private transient int _cannotResolveCount = 0;
+	private transient int _resolvedCount = 0;
+
+	private final double _RELIABILITYTHRESHOLD = 0.95;
+	private final int _STATMIN = 30;
+
+	// No longer use batch, use second order cyc collection to classify
+	// private static int BATCHSIZE_ = 200;
 
 	@Override
 	public Collection<DAGEdge> execute(Object... arg0)
@@ -71,44 +89,23 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		transitiveModule_ = (TransitiveIntervalSchemaModule) dag_
 				.getModule(TransitiveIntervalSchemaModule.class);
 		queryModule_ = (QueryModule) dag_.getModule(QueryModule.class);
-		relationCounts_ = new HashMap<String, int[]>();
-		dummyDisjoints_ = new HashMap<String, String>();
-		resolvedNames_ = new HashMap<String, DAGNode>();
-		unknownBackups_ = new HashMap<String, ArrayList<Pair<Node, Node>>>();
-		disjointRelations_ = new HashSet<String>();
-		blackListRelations_ = new HashSet<String>();
+		dummyDisjoints_ = new ConcurrentHashMap<Pair<String, String>, Boolean>();
+		resolvedNames_ = new ConcurrentHashMap<String, ArrayList<DAGNode>>();
 
+		// explored_ = new ConcurrentHashMap<String, ConcurrentHashMap<String,
+		// String>>();
+
+		relationReliabilityCount_ = new ConcurrentHashMap<String, int[]>();
+		interRelastionReliabilityCount_ = new ConcurrentHashMap<String, ConcurrentHashMap<Node, int[]>>();
+		unknownBackups_ = new ConcurrentHashMap<String, ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>>>();
+
+		secondordercyc = (DAGNode) dag_.findOrCreateNode(
+				"SecondOrderCollection", null, true);
 		partiallyTangible = (DAGNode) dag_.findOrCreateNode(
 				"PartiallyTangible", null, true);
 		genls = CommonConcepts.GENLS.getNode(dag_);
 		isa = CommonConcepts.ISA.getNode(dag_);
 		and = CommonConcepts.AND.getNode(dag_);
-
-		// blackListRelations_.add("IsA");
-		// blackListRelations_.add("RelatedTo");
-		// blackListRelations_.add("Synonym");
-		// blackListRelations_.add("HasProperty");
-		// blackListRelations_.add("InstanceOf");
-		// blackListRelations_.add("TranslationOf");
-		// blackListRelations_.add("DerivedFrom");
-		// blackListRelations_.add("Antonym");
-		// blackListRelations_.add("MemberOf");
-
-		// disjointRelations_.add("AtLocation");
-		// disjointRelations_.add("PartOf");
-		// disjointRelations_.add("CausesDesire");
-		// disjointRelations_.add("SimilarTo");
-		// disjointRelations_.add("Attribute");
-		// disjointRelations_.add("UsedFor");
-		// disjointRelations_.add("CapableOf");
-		// disjointRelations_.add("HasPrerequisite");
-		// disjointRelations_.add("ReceivesAction");
-		// disjointRelations_.add("Desires");
-		// disjointRelations_.add("Causes");
-		// disjointRelations_.add("Antonym");
-		// disjointRelations_.add("HasA");
-		// disjointRelations_.add("wordnet");
-		// disjointRelations_.add("NotHasProperty");
 
 		aliasModule_ = (NodeAliasModule) dag_.getModule(NodeAliasModule.class);
 
@@ -117,17 +114,19 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 			wmiAcc = new WMIAccess(1, -1);
 			wmiSocket_ = wmiAcc.requestSocket();
 		} catch (UnknownHostException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} catch (IOException e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 		System.out.println("start to process concepts");
 
-		processYagoData();
+		// processYagoData();
 		// processNELLData();
-		// processConceptNetData();
+		try {
+			processConceptNetData();
+		} catch (URISyntaxException e) {
+			e.printStackTrace();
+		}
 
 		System.out.println("process concepts done");
 		printCounts();
@@ -136,30 +135,40 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	private void printCounts() {
-		for (Entry<String, int[]> e : relationCounts_.entrySet()) {
-			if (e.getValue() == null) {
-				System.out.println(e.getKey() + " has null value");
+		try (PrintWriter log = new PrintWriter(new BufferedWriter(
+				new FileWriter("countLog.txt", true)))) {
+			for (Entry<String, int[]> e : relationReliabilityCount_.entrySet()) {
+				if (e.getValue() == null) {
+					log.println(e.getKey() + " has null value");
+				}
+
+				// dis,con,unk
+				System.out.println(e.getKey() + "," + e.getValue()[0] + ","
+						+ e.getValue()[1] + "," + e.getValue()[2]);
+
+				String relationname = e.getKey();
+
+				for (Entry<Node, int[]> r : interRelastionReliabilityCount_
+						.get(relationname).entrySet()) {
+
+					// dis,con,unk
+					log.println(r.getKey() + "," + r.getValue()[0] + ","
+							+ r.getValue()[1] + "," + r.getValue()[2] + ","
+							+ (r.getValue()[0] + r.getValue()[1]) + ","
+							+ relationname);
+				}
 			}
-
-			System.out.println(e.getKey() + ": " + e.getValue()[0]
-					+ " disjoints, " + e.getValue()[1] + " conjoints, "
-					+ e.getValue()[2] + " unkown");
+			log.println("_notFoundCount: " + _notFoundCount);
+			log.println("_cannotResolveCount: " + _cannotResolveCount);
+			log.println("_resolvedCount: " + _resolvedCount);
+		} catch (IOException e1) {
+			e1.printStackTrace();
 		}
-		for (String e : disjointRelations_) {
-			System.out.println("White listed relations: " + e);
-		}
-		for (String e : blackListRelations_) {
-			System.out.println("Black listed relations: " + e);
-		}
-
-		System.out.println("_notFoundCount: " + _notFoundCount);
-		System.out.println("_cannotResolveCount: " + _cannotResolveCount);
-		System.out.println("_resolvedCount: " + _resolvedCount);
 	}
 
 	private void processYagoData() {
-		int linecount=0;
-		
+		int linecount = 0;
+
 		File folder = new File("I:/Documents/Java/CycDAG/Yago");
 		if (folder.isDirectory()) {
 			System.out.println("123");
@@ -175,7 +184,7 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 
 					while ((line = br.readLine()) != null) {
 						linecount++;
-						
+
 						// skip if the line is not start with '<'
 						if (!line.startsWith("<"))
 							continue;
@@ -202,11 +211,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						String nodename1 = parts[0];
 						String nodename2 = parts[2];
 
-						DAGNode n1 = resolveAmbiguity(nodename1);
+						ArrayList<DAGNode> n1 = resolveAmbiguity(nodename1);
 						if (n1 == null) {
 							continue;
 						}
-						DAGNode n2 = resolveAmbiguity(nodename2);
+						ArrayList<DAGNode> n2 = resolveAmbiguity(nodename2);
 						if (n2 == null) {
 							continue;
 						}
@@ -214,31 +223,23 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
 						Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
 
-						try (PrintWriter out = new PrintWriter(
-								new BufferedWriter(new FileWriter(
-										"newDisjoints.txt", true)))) {
-							for (Node c1 : disjointCandidates1) {
-								for (Node c2 : disjointCandidates2) {
-									updateSchema(relationName, log, out, c1,
-											c2, nodename1, nodename2);
+						for (Node c1 : disjointCandidates1) {
+							for (Node c2 : disjointCandidates2) {
+								updateSchema(relationName, log, c1, c2,
+										nodename1, nodename2);
 
-								}
 							}
 						}
-						//check marks after every 1000 lines
-						if(linecount%1000==0)
-							checkRelationshipMarks();
-						
+
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
-				checkRelationshipMarks();
 			}
 		} catch (IOException e1) {
 			e1.printStackTrace();
 		}
-
+		tryToProcessReliabilityCounts();
 	}
 
 	private void processNELLData() {
@@ -266,11 +267,6 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						String relationName = properties[indexmap
 								.get("Relation")];
 
-						// Skip blacklisted relation
-						if (blackListRelations_.contains(relationName)) {
-							continue;
-						}
-
 						Pattern pattern = Pattern.compile("-(.*)");
 						Matcher matcher = pattern.matcher(properties[indexmap
 								.get("Action")]);
@@ -282,11 +278,11 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						// Make first letter uppercase
 						String nodename1 = properties[indexmap.get("Entity")];
 						String nodename2 = properties[indexmap.get("Value")];
-						DAGNode n1 = resolveAmbiguity(nodename1);
+						ArrayList<DAGNode> n1 = resolveAmbiguity(nodename1);
 						if (n1 == null) {
 							continue;
 						}
-						DAGNode n2 = resolveAmbiguity(nodename2);
+						ArrayList<DAGNode> n2 = resolveAmbiguity(nodename2);
 						if (n2 == null) {
 							continue;
 						}
@@ -294,21 +290,17 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 						Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
 						Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
 
-						try (PrintWriter out = new PrintWriter(
-								new BufferedWriter(new FileWriter(
-										"newDisjoints.txt", true)))) {
-							for (Node c1 : disjointCandidates1) {
-								for (Node c2 : disjointCandidates2) {
-									updateSchema(relationName, log, out, c1,
-											c2, nodename1, nodename2);
-								}
+						for (Node c1 : disjointCandidates1) {
+							for (Node c2 : disjointCandidates2) {
+								updateSchema(relationName, log, c1, c2,
+										nodename1, nodename2);
 							}
 						}
 					}
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
-				checkRelationshipMarks();
+				tryToProcessReliabilityCounts();
 			}
 		} catch (IOException e1) {
 			e1.printStackTrace();
@@ -336,18 +328,19 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	private void processConceptNetData() throws URISyntaxException {
-		File folder = new File(this.getClass().getResource("/ConceptNet/")
-				.toURI());
+		File folder = new File("I:/Documents/Java/CycDAG//ConceptNet");
 		File[] files = folder.listFiles();
 
 		try (PrintWriter log = new PrintWriter(new BufferedWriter(
 				new FileWriter("importerLog.txt", true)))) {
 			String line;
+
 			for (File file : files) {
 				try (BufferedReader br = new BufferedReader(
 						new FileReader(file))) {
 					System.out.println("processing:" + file.getName());
 					while ((line = br.readLine()) != null) {
+
 						Pattern pattern = Pattern.compile("\\[(.+)\\]");
 						Matcher matcher = pattern.matcher(line);
 						if (matcher.find()) {
@@ -359,132 +352,218 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 								continue;
 							}
 							String relationName = matcher.group(1);
-							// Skip blacklisted relation
-							if (blackListRelations_.contains(relationName)) {
-								continue;
-							}
+
 							pattern = Pattern
 									.compile(",\\/c\\/en\\/([^\\,]+?)\\/");
 							matcher = pattern.matcher(data);
-							if (matcher.find()) {
-								// Make first letter uppercase
+							if (matcher.find()) { // Make first letter uppercase
 								String nodename1 = matcher.group(1);
 								if (!matcher.find()) {
 									continue;
 								}
 								String nodename2 = matcher.group(1);
-								DAGNode n1 = resolveAmbiguity(nodename1);
+								ArrayList<DAGNode> n1 = resolveAmbiguity(nodename1);
 								if (n1 == null) {
 									continue;
 								}
-								DAGNode n2 = resolveAmbiguity(nodename2);
+								ArrayList<DAGNode> n2 = resolveAmbiguity(nodename2);
 								if (n2 == null) {
 									continue;
 								}
 								checkorAddRelation(relationName);
-								Collection<Node> disjointCandidates1 = getDisjointCandidates(n1);
-								Collection<Node> disjointCandidates2 = getDisjointCandidates(n2);
+								Collection<Node> disjointCandidatesLeft = getDisjointCandidates(n1);
+								Collection<Node> disjointCandidatesRight = getDisjointCandidates(n2);
 
-								try (PrintWriter out = new PrintWriter(
-										new BufferedWriter(new FileWriter(
-												"newDisjoints.txt", true)))) {
-									for (Node c1 : disjointCandidates1) {
-										for (Node c2 : disjointCandidates2) {
-											updateSchema(relationName, log,
-													out, c1, c2, nodename1,
-													nodename2);
-										}
+								for (Node left : disjointCandidatesLeft) {
+									for (Node right : disjointCandidatesRight) {
+										updateSchema(relationName, log, left,
+												right, nodename1, nodename2);
 									}
 								}
 							}
 						}
+
 					}
 
 				} catch (Exception e) {
 					e.printStackTrace();
 					System.err.print(e.getMessage());
 				}
-				checkRelationshipMarks();
 			}
+			tryToProcessReliabilityCounts();
 		} catch (IOException e1) {
-			// TODO Auto-generated catch block
 			e1.printStackTrace();
 		}
 	}
 
-	private void checkRelationshipMarks() {
-		for (Entry<String, int[]> r : relationCounts_.entrySet()) {
-			if (!disjointRelations_.contains(r.getKey())
-					&& !blackListRelations_.contains(r.getKey())) {
-				double disjointcount = r.getValue()[0];
-				double conjointcount = r.getValue()[1];
-
-				if (disjointcount + conjointcount >= BATCHSIZE_) {
-					if (conjointcount / (disjointcount + conjointcount) <= 0.05) {
-						//disjointRelations_.add(r.getKey());
-						putUnknownsToDisjoint(r.getKey());
-					} else {
-						//blackListRelations_.add(r.getKey());
-					}
-					//reset stats
-					r.setValue(new int[] { 0, 0, 0 });
-				}
-			}
-		}
-
-	}
-
-	private void putUnknownsToDisjoint(String key) {
-		ArrayList<Pair<Node, Node>> l = unknownBackups_.get(key);
+	private void tryToProcessReliabilityCounts() {
 		try (PrintWriter out = new PrintWriter(new BufferedWriter(
 				new FileWriter("newDisjoints.txt", true)))) {
-			for (Pair<Node, Node> p : l) {
-				createDisjointEdge(out, p.objA_, p.objB_, key, "resolved",
-						"resolved");
+			DecimalFormat df = new DecimalFormat("#.##");
+			// For each relationship
+			for (Entry<String, ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>>> r : unknownBackups_
+					.entrySet()) {
+				String relationname = r.getKey();
+				ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>> unks = r
+						.getValue();
+				ConcurrentHashMap<Node, int[]> intermap = interRelastionReliabilityCount_
+						.get(relationname);
+
+				if (getReliabilityScore(
+						relationReliabilityCount_.get(relationname),
+						this._STATMIN) >= this._RELIABILITYTHRESHOLD) {
+					// If it is a reliable relationship
+
+					// For each unk node
+					for (Entry<Pair<Node, Node>, ArrayList<Node>> e : unks
+							.entrySet()) {
+						boolean good = true;
+						Node lower = null;
+						double score = 0;
+
+						for (Node evidencenode : e.getValue()) {
+							// Calculate confidence
+							if (getReliabilityScore(intermap.get(evidencenode),
+									0) < this._RELIABILITYTHRESHOLD) {
+								good = false;
+								lower = evidencenode;
+								score = getReliabilityScore(
+										intermap.get(evidencenode), 0);
+								break;
+							}
+						}
+
+						StringBuffer sb = new StringBuffer("");
+
+						if (good)
+							createDisjointEdge(out, e.getKey().objA_,
+									e.getKey().objB_, relationname, sb);
+					}
+
+				} else if (getReliabilityScore(
+						relationReliabilityCount_.get(relationname),
+						this._STATMIN) >= 0.8) {
+
+					// For each unk node
+					for (Entry<Pair<Node, Node>, ArrayList<Node>> e : unks
+							.entrySet()) {
+						boolean good = true;
+						Node lower = null;
+						double score = 0;
+						for (Node evidencenode : e.getValue()) {
+							// Calculate confidence
+							if (getReliabilityScore(intermap.get(evidencenode),
+									0) < this._RELIABILITYTHRESHOLD) {
+								good = false;
+								lower = evidencenode;
+								score = getReliabilityScore(
+										intermap.get(evidencenode), 0);
+								break;
+							}
+						}
+
+						StringBuffer sb = new StringBuffer("");
+
+						if (good)
+							createDisjointEdge(out, e.getKey().objA_,
+									e.getKey().objB_, relationname, sb);
+
+					}
+
+				}
+
 			}
-		} catch (IOException e) {
-			// TODO Auto-generated catch block
-			e.printStackTrace();
+
+		} catch (IOException e1) {
+			e1.printStackTrace();
 		}
 	}
 
-	private void updateSchema(String relationName, PrintWriter log,
-			PrintWriter out, Node c1, Node c2, String nodename1,
-			String nodename2) {
+	private double getReliabilityScore(int[] countArray, int threshold) {
+		double disjointcount = countArray[0];
+		double conjointcount = countArray[1];
+		if ( /* conjointcount>0 || */disjointcount + conjointcount < threshold)
+			return -1;
+		else
+			return disjointcount / (disjointcount + conjointcount);
 
-		if (!c1.equals(c2)) {
-			if (isAlreadyDisjointed(c1, c2)) {
-				System.out.println(relationName + ": " + c1.getName()
-						+ " known disjoint to " + c2.getName());
-				// log
-				log.println(relationName + ": " + c1.getName()
-						+ " known disjoint to " + c2.getName() + ": "
-						+ nodename1 + "," + nodename2);
-				relationCounts_.get(relationName)[0]++;
-			} else if (hasConjoint(c1, c2)) {
-				relationCounts_.get(relationName)[1]++;
-				System.out.println(relationName + ": " + c1.getName()
-						+ " known conjoint to " + c2.getName());
-				// log
-				log.println(relationName + ": " + c1.getName()
-						+ " known conjoint to " + c2.getName() + ": "
-						+ nodename1 + "," + nodename2);
+	}
+
+	// private void putUnknownsToDisjoint(String key, Pair<String, String> pair,
+	// PrintWriter out) {
+	// ArrayList<Pair<String, String>> l = unknownBackups_.get(key).get(pair);
+	//
+	// for (Pair<String, String> p : l) {
+	// createDisjointEdge(out, p.objA_, p.objB_, key, "resolved",
+	// "resolved");
+	// }
+	// l.clear();
+	// }
+
+	private void updateSchema(String relationName, PrintWriter log, Node left,
+			Node right, String nodename1, String nodename2) {
+
+		String outStr;
+		if (!left.equals(right)) {
+			if (isAlreadyDisjointed(left, right)) {
+				updateReliabilityCount(relationName, left, right, 0);
+				outStr = relationName + ": " + left.getName()
+						+ " known disjoint to " + right.getName() + ": "
+						+ nodename1 + "," + nodename2;
+			} else if (hasConjoint(left, right)) {
+				updateReliabilityCount(relationName, left, right, 1);
+				outStr = relationName + ": " + left.getName()
+						+ " known conjoint to " + right.getName() + ": "
+						+ nodename1 + "," + nodename2;
 			} else {
-				relationCounts_.get(relationName)[2]++;
-				log.println(relationName + ": " + c1.getName() + " unknown to "
-						+ c2.getName() + ": " + nodename1 + "," + nodename2);
-
-				// Check that this relation is good to use
-				if (!disjointRelations_.contains(relationName)) {
-					// save this pair for future use
-					unknownBackups_.get(relationName).add(
-							new Pair<Node, Node>(c1, c2));
-					return;
-				}
-				createDisjointEdge(out, c1, c2, relationName, nodename1,
-						nodename2);
+				updateReliabilityCount(relationName, left, right, 2);
+				outStr = relationName + ": " + left.getName() + " unknown to "
+						+ right.getName() + ": " + nodename1 + "," + nodename2;
 			}
+			System.out.println(outStr);
+			log.println(outStr);
 		}
+	}
+
+	private void updateReliabilityCount(String relationName, Node left,
+			Node right, int flag) {
+		relationReliabilityCount_.get(relationName)[flag]++;
+
+		ConcurrentHashMap<Node, int[]> intermap = interRelastionReliabilityCount_
+				.get(relationName);
+		ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>> unkmap = unknownBackups_
+				.get(relationName);
+
+		// Double loop to create pair of second order cyc isa parent from both
+		// node
+		ArrayList<Node> leftIsa = getAllGenlsParents(left);
+		ArrayList<Node> rightIsa = getAllGenlsParents(right);
+
+		ArrayList<Node> commonparents = getCommomParents(leftIsa, rightIsa);
+
+		for (Node node : commonparents) {
+			if (!isTangible(node))
+				continue;
+			if (!intermap.containsKey(node)) {
+				intermap.put(node, new int[] { 0, 0, 0 });
+			}
+			intermap.get(node)[flag]++;
+			if (flag == 2) {// If it's unknown, add to unknown backups
+				Pair<Node, Node> pair = new Pair<Node, Node>(left, right);
+				if (unkmap.get(pair) == null)
+					unkmap.put(pair, new ArrayList<Node>());
+				unkmap.get(pair).add(node);
+			}
+
+		}
+
+	}
+
+	private ArrayList<Node> getCommomParents(ArrayList<Node> listA,
+			ArrayList<Node> listB) {
+		ArrayList<Node> intersect = new ArrayList<Node>(
+				CollectionUtils.intersection(listA, listB));
+		return intersect;
 	}
 
 	private boolean isAlreadyDisjointed(Node targetNode, Node child) {
@@ -493,20 +572,13 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	private boolean hasConjoint(Node nodeA, Node nodeB) {
+		if (isAlreadyDisjointed(nodeA, nodeB))
+			return false;
+
 		// Check they are not Genls to each other
 		if (transitiveModule_.execute(true, nodeA, nodeB) != null
 				|| transitiveModule_.execute(false, nodeA, nodeB) != null)
 			return true;
-
-		// Check they do not have conjoint point
-		// Node[] args = dag_.parseNodes(
-		// "(and (genls ?X " + nodeA.getIdentifier() + ") (genls ?X "
-		// + nodeB.getIdentifier() + "))", null, false, false);
-		// // query: and (genls ?X n1) (genls ?X n2)
-		// DAGNode node = new DAGNode();
-		// Substitution substitution = new Substitution("?X", node);
-		// boolean satisfies = queryModule_.prove(substitution
-		// .applySubstitution(args));
 
 		// Check they do not have genls conjoint point
 		VariableNode x = VariableNode.DEFAULT;
@@ -528,136 +600,98 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 		return false;
 	}
 
-	// private Node creator = new StringNode("ConceptNetAnalyzer");
+	private void createDisjointEdge(PrintWriter out, Node left, Node right,
+			String relationName, StringBuffer sb) {
 
-	private void createDisjointEdge(PrintWriter out, Node c1, Node c2,
-			String relationName, String nodename1, String nodename2) {
+		Pair<String, String> p = left.getName().hashCode() > right.getName()
+				.hashCode() ? new Pair<String, String>(left.getName(),
+				right.getName()) : new Pair<String, String>(right.getName(),
+				left.getName());
+
 		// check the pair has not being added
-		if (dummyDisjoints_.containsKey(c1.getName())
-				&& dummyDisjoints_.get(c1.getName()).equals(c2.getName()))
+		if (dummyDisjoints_.containsKey(p))
 			return;
-		else if (dummyDisjoints_.containsKey(c2.getName())
-				&& dummyDisjoints_.get(c2.getName()).equals(c1.getName()))
-			return;
-		
-		dag_.findOrCreateEdge(
-				new Node[] { CommonConcepts.DISJOINTWITH.getNode(dag_), c1, c2 },
-				new StringNode("ConceptNetAnalyzer" + relationName), false);
+
 		// Create disjoint
-		out.println(c1.getName() + "," + c2.getName() + "," + relationName);
-		dummyDisjoints_.put(c1.getName(), c2.getName());
+		out.println(sb.toString() + left.getName() + "," + right.getName()
+				+ "," + relationName + ",");
+
+		// if (left.hashCode() > right.hashCode())
+		dummyDisjoints_.put(p, true);
+		// else
+		// dummyDisjoints_.put(rightKey, leftKey);
 	}
 
-	private Collection<Node> getDisjointCandidates(DAGNode node) {
-		assert node != null;
-		// Check if it is an individual
-		ArrayList<Node> r = (ArrayList<Node>) CommonQuery.DIRECTGENLS.runQuery(
-				dag_, node);
-		if (r.size() == 0) {
-			r.addAll(CommonQuery.MINISA.runQuery(dag_, node));
-		} else {
-			r.clear();
-			r.addAll(CommonQuery.MINISA.runQuery(dag_, node));
-			r.add(node);
-		}
-		assert r.get(0) != null;
+	private Collection<Node> getDisjointCandidates(ArrayList<DAGNode> nodes) {
 		ArrayList<Node> retu = new ArrayList<Node>();
-		for (Node n : r) {
-			if (queryModule_.prove(genls, n, partiallyTangible)) {
-				retu.add(n);
+
+		for (Node node : nodes) {
+			// Check if it is an individual
+			ArrayList<Node> r = (ArrayList<Node>) CommonQuery.DIRECTGENLS
+					.runQuery(dag_, node);
+			if (r.size() == 0) {
+				r.addAll(CommonQuery.MINISA.runQuery(dag_, node));
+			} else {
+				r.clear();
+				r.addAll(CommonQuery.MINISA.runQuery(dag_, node));
+				r.add(node);
+			}
+			assert r.get(0) != null;
+			for (Node n : r) {
+				if (isTangible(n)) {
+					retu.add(n);
+				}
 			}
 		}
 		return retu;
 	}
 
-	private int _notFoundCount = 0;
-	private int _cannotResolveCount = 0;
-	private int _resolvedCount = 0;
-
-	private DAGNode resolveAmbiguity(String nodename) throws IOException {
+	private ArrayList<DAGNode> resolveAmbiguity(String nodename)
+			throws IOException {
 		if (resolvedNames_.containsKey(nodename)) {
 			return resolvedNames_.get(nodename);
 		}
+
 		Collection<DAGNode> nodes = aliasModule_
 				.findNodes(nodename, true, true);
-		DAGNode r;
-		if (nodes.size() == 1) {
-			r = (DAGNode) nodes.toArray()[0];
+		ArrayList<DAGNode> r = (ArrayList<DAGNode>) nodes;
+		if (r.size() >= 1) {
+			resolvedNames_.put(nodename, r);
 			_resolvedCount++;
 			return r;
-		} else if (nodes.size() > 1) {
-			// if (nodes.size() >= 1) {
-			// System.out.println(nodes);
+		} else {
 			r = getConcentratedConcept(nodename, nodes);
 			if (r != null) {
-				try (PrintWriter out = new PrintWriter(new BufferedWriter(
-						new FileWriter("resolutionLog.txt", true)))) {
-					System.out.println(nodename + " is most likely to be "
-							+ r.getName());
-					out.println(nodename + " is most likely to be "
-							+ r.getName());
-				}
 				resolvedNames_.put(nodename, r);
 				_resolvedCount++;
 				return r;
-			}
-			_cannotResolveCount++;
-		} else {
-			_notFoundCount++;
+			} else
+				_notFoundCount++;
 		}
 
 		return null;
 	}
 
-	private DAGNode getConcentratedConcept(String nodename,
+	private ArrayList<DAGNode> getConcentratedConcept(String nodename,
 			Collection<DAGNode> nodes) throws IOException {
 		WeightedSet<Integer> w = wmiSocket_.getWeightedArticles(nodename);
 		// System.out.println(w);
-		if (w.size() >= 1) {
-			int key = Integer.parseInt(w.getMostLikely().toArray()[0]
-					.toString());
-			String wikiphase = wmiSocket_.getPageTitle(key, false);
-			if (w.getWeight(key) >= 0.95) {
-				// System.out.println(nodename + "'s wikiphase is " +
-				// wikiphase);
-				DAGNode r = dag_.findDAGNode(nodename);
+		ArrayList<DAGNode> r = new ArrayList<DAGNode>();
 
-				if (r != null) {
-					return r;
-				}
-				boolean occured = false;
-				// double mark = 0;
-				// find the node with greatest relatedness mark
-				for (DAGNode n : nodes) {
-					Node[] args = dag_.parseNodes("(prettyString-Canonical "
-							+ n.getIdentifier() + " ?X)", null, false, false);
-					Collection<Substitution> results = queryModule_
-							.execute(new QueryObject(args));
-
-					for (Substitution sub : results) {
-						String s = sub.getSubstitution("?X").getName();
-						s = s.substring(0, 1).toUpperCase() + s.substring(1);
-						// System.out.println(s+" vs wiki "+wikiphase);
-						if (s.equals(wikiphase)) {
-							// If two nodes has the same prettystring dont
-							// decide
-							if (!occured) {
-								occured = true;
-								r = n;
-							} else {
-								return null;
-							}
-						}
+		if (w.size() > 0) {
+			for (int i = 0; i < w.size(); i++) {
+				int key = Integer.parseInt(w.getOrdered().toArray()[i]
+						.toString());
+				if (w.getWeight(key) >= 0.2) {
+					String wikiphase = wmiSocket_.getPageTitle(key, false);
+					Collection<DAGNode> nodesfromwiki = aliasModule_.findNodes(
+							wikiphase, true, true);
+					if (nodesfromwiki.size() > 0) {
+						r.addAll(nodesfromwiki);
 					}
-
-					// double t = getRelatednessMark(n, key);
-					// if (t > mark) {
-					// r = n;
-					// mark=t;
-					// }
 				}
-				return r;
 			}
+			return r;
 		}
 		return null;
 	}
@@ -748,11 +782,32 @@ public class ConceptNetAnalyzerImporter extends DAGModule<Collection<DAGEdge>> {
 	}
 
 	private void checkorAddRelation(String relationName) {
-		if (!relationCounts_.containsKey(relationName)) {
-			relationCounts_.put(relationName, new int[] { 0, 0, 0 });
-			unknownBackups_
-					.put(relationName, new ArrayList<Pair<Node, Node>>());
+		if (!relationReliabilityCount_.containsKey(relationName)) {
+
+			relationReliabilityCount_.put(relationName, new int[] { 0, 0, 0 });
+			interRelastionReliabilityCount_.put(relationName,
+					new ConcurrentHashMap<Node, int[]>());
+
+			// explored_.put(relationName, new ConcurrentHashMap<String,
+			// String>());
+			unknownBackups_.put(relationName,
+					new ConcurrentHashMap<Pair<Node, Node>, ArrayList<Node>>());
+
 		}
+	}
+
+	private ArrayList<Node> getAllGenlsParents(Node inputNode) {
+		ArrayList<Node> children = new ArrayList<Node>(
+				CommonQuery.ALLGENLS.runQuery(dag_, inputNode));
+		return children;
+	}
+
+	private boolean isTangible(Node node) {
+		return queryModule_.prove(genls, node, partiallyTangible);
+	}
+
+	private boolean isSecondOrderCollection(Node node) {
+		return queryModule_.prove(isa, node, secondordercyc);
 	}
 
 }
